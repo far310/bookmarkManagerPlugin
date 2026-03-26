@@ -1,6 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { AnimatePresence, motion } from 'motion/react';
+import {
+  Search, X, Plus, FolderPlus, Bookmark, Folder,
+  Pencil, Trash2, FolderInput, Check, BookmarkX,
+  ChevronRight, Settings2, RotateCcw, Loader2,
+} from 'lucide-react';
 import '@pages/options/Options.css';
 import { ApiResponse, BookmarkAction, BookmarkNode } from '@src/types/bookmark';
+import { Button } from '@src/components/animate-ui/components/buttons/button';
+import { Fade } from '@src/components/animate-ui/primitives/effects/fade';
+import { SlidingNumber } from '@src/components/animate-ui/primitives/texts/sliding-number';
 
 function sendAction<T>(action: BookmarkAction): Promise<ApiResponse<T>> {
   return new Promise((resolve, reject) => {
@@ -264,215 +273,397 @@ export default function Options() {
   }
 
   function renderNodes(nodes: BookmarkNode[], depth = 0): React.ReactNode {
-    return nodes.map((node) => {
+    return nodes.map((node, idx) => {
       const isFolder = !node.url;
       const isRoot = isRootNode(node);
       const isPending = actionPendingId === node.id;
       const canShowChildren = !isSearching && !!node.children?.length;
 
       return (
-        <div key={node.id}>
-          <div className="rounded-md border border-gray-200 bg-white p-3 shadow-sm">
-            <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-              <div className="min-w-0" style={{ paddingLeft: `${depth * 14}px` }}>
-                <div className="text-sm text-gray-500">{isFolder ? 'Folder' : 'Bookmark'}</div>
-                {editingId === node.id ? (
-                  <div className="mt-1 flex gap-2">
-                    <input
-                      className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
-                      value={editingTitle}
-                      onChange={(event) => setEditingTitle(event.target.value)}
-                    />
-                    <button
-                      className="rounded bg-blue-600 px-2 py-1 text-sm text-white"
-                      onClick={() => void handleRename(node)}
-                      disabled={isPending}
-                    >
-                      Save
-                    </button>
-                    <button
-                      className="rounded border border-gray-300 px-2 py-1 text-sm"
-                      onClick={() => {
-                        setEditingId(null);
-                        setEditingTitle('');
-                      }}
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="truncate text-base font-semibold text-gray-900">
-                      {node.title || '(Untitled)'}
-                    </div>
-                    {node.url && (
-                      <a
-                        href={node.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="block truncate text-sm text-blue-600 hover:underline"
+        <motion.div
+          key={node.id}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, x: -12 }}
+          transition={{ duration: 0.2, delay: Math.min(idx * 0.03, 0.2) }}
+        >
+          <div
+            className="group relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white/80 shadow-sm backdrop-blur transition hover:border-indigo-200 hover:shadow-md"
+            style={{ marginLeft: depth > 0 ? `${depth * 20}px` : undefined }}
+          >
+            {/* left accent bar */}
+            <div
+              className={[
+                'absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl',
+                isFolder ? 'bg-amber-400/60' : 'bg-indigo-500/60',
+              ].join(' ')}
+            />
+
+            <div className="flex flex-col gap-3 px-4 py-3 pl-5">
+              {/* top row: icon + title/url + type badge */}
+              <div className="flex items-start gap-3">
+                <div
+                  className={[
+                    'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow-sm',
+                    isFolder ? 'bg-amber-100' : 'bg-indigo-100',
+                  ].join(' ')}
+                >
+                  {isFolder ? (
+                    <Folder className="size-4 text-amber-600" />
+                  ) : (
+                    <Bookmark className="size-4 text-indigo-600" />
+                  )}
+                </div>
+
+                <div className="min-w-0 flex-1">
+                  {editingId === node.id ? (
+                    <div className="flex gap-2">
+                      <input
+                        autoFocus
+                        className="flex-1 rounded-xl border border-indigo-300 bg-indigo-50/60 px-3 py-1.5 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 transition"
+                        value={editingTitle}
+                        onChange={(e) => setEditingTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') void handleRename(node);
+                          if (e.key === 'Escape') { setEditingId(null); setEditingTitle(''); }
+                        }}
+                      />
+                      <Button
+                        className="rounded-xl bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 gap-1"
+                        onClick={() => void handleRename(node)}
+                        disabled={isPending}
+                        hoverScale={1.04} tapScale={0.95}
                       >
-                        {node.url}
-                      </a>
-                    )}
-                  </>
+                        {isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
+                        Save
+                      </Button>
+                      <Button
+                        className="rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 hover:bg-slate-50"
+                        onClick={() => { setEditingId(null); setEditingTitle(''); }}
+                        hoverScale={1.03} tapScale={0.97}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="truncate text-sm font-semibold text-slate-900">
+                        {node.title || '(Untitled)'}
+                      </div>
+                      {node.url && (
+                        <a
+                          href={node.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="block truncate text-xs text-indigo-500 hover:text-indigo-700 hover:underline transition"
+                        >
+                          {node.url}
+                        </a>
+                      )}
+                    </>
+                  )}
+                </div>
+
+                {!isRoot && editingId !== node.id && (
+                  <span
+                    className={[
+                      'mt-1 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
+                      isFolder ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700',
+                    ].join(' ')}
+                  >
+                    {isFolder ? 'Folder' : 'Bookmark'}
+                  </span>
                 )}
               </div>
 
-              {!isRoot && (
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    className="rounded border border-gray-300 px-2 py-1 text-sm text-gray-700"
-                    onClick={() => {
-                      setEditingId(node.id);
-                      setEditingTitle(node.title);
-                    }}
+              {/* action row */}
+              {!isRoot && editingId !== node.id && (
+                <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-2">
+                  <Button
+                    className="gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                    onClick={() => { setEditingId(node.id); setEditingTitle(node.title); }}
                     disabled={isPending}
+                    hoverScale={1.04} tapScale={0.95}
                   >
+                    <Pencil className="size-3" />
                     Rename
-                  </button>
+                  </Button>
 
-                  <select
-                    className="rounded border border-gray-300 px-2 py-1 text-sm"
-                    value={moveTargets[node.id] || ''}
-                    onChange={(event) =>
-                      setMoveTargets((prev) => ({ ...prev, [node.id]: event.target.value }))
-                    }
-                    disabled={isPending}
-                  >
-                    <option value="">Move to...</option>
-                    {folders.map((folder) => (
-                      <option key={folder.id} value={folder.id}>
-                        {folder.title || '(Untitled Folder)'}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="flex gap-1.5">
+                    <select
+                      className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-700 outline-none focus:border-indigo-300 transition disabled:opacity-50"
+                      value={moveTargets[node.id] || ''}
+                      onChange={(e) => setMoveTargets((prev) => ({ ...prev, [node.id]: e.target.value }))}
+                      disabled={isPending}
+                    >
+                      <option value="">Move to…</option>
+                      {folders.map((folder) => (
+                        <option key={folder.id} value={folder.id}>
+                          {folder.title || '(Untitled Folder)'}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      className="gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
+                      onClick={() => void handleMove(node)}
+                      disabled={isPending}
+                      hoverScale={1.04} tapScale={0.95}
+                    >
+                      {isPending ? <Loader2 className="size-3 animate-spin" /> : <FolderInput className="size-3" />}
+                      Move
+                    </Button>
+                  </div>
 
-                  <button
-                    className="rounded border border-gray-300 px-2 py-1 text-sm text-gray-700"
-                    onClick={() => void handleMove(node)}
-                    disabled={isPending}
-                  >
-                    Move
-                  </button>
-
-                  <button
-                    className="rounded bg-red-600 px-2 py-1 text-sm text-white"
+                  <Button
+                    className="ml-auto gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] font-medium text-red-600 hover:bg-red-100 hover:border-red-300"
                     onClick={() => void handleDelete(node)}
                     disabled={isPending}
+                    hoverScale={1.04} tapScale={0.95}
                   >
+                    {isPending ? <Loader2 className="size-3 animate-spin text-red-600" /> : <Trash2 className="size-3" />}
                     Delete
-                  </button>
+                  </Button>
                 </div>
               )}
             </div>
           </div>
 
-          {canShowChildren && <div className="mt-2 space-y-2">{renderNodes(node.children || [], depth + 1)}</div>}
-        </div>
+          {canShowChildren && (
+            <motion.div
+              className="mt-1.5 space-y-1.5"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              transition={{ delay: 0.05 }}
+            >
+              {renderNodes(node.children || [], depth + 1)}
+            </motion.div>
+          )}
+        </motion.div>
       );
     });
   }
 
   return (
-    <main className="container mx-auto max-w-6xl space-y-4 px-4 py-6 text-gray-900">
-      <header className="space-y-1">
-        <h1 className="text-2xl font-bold">Bookmark Manager</h1>
-        <p className="text-sm text-gray-600">
-          Manage bookmarks and folders from one place. Data is loaded from the background service.
-        </p>
-      </header>
+    <main className="min-h-screen bg-[radial-gradient(ellipse_at_top_left,#eef2ff_0%,#f8fafc_50%,#f1f5f9_100%)] px-4 py-6 text-slate-900">
+      {/* ambient blobs */}
+      <div className="pointer-events-none fixed -top-32 -right-32 h-80 w-80 rounded-full bg-indigo-300/20 blur-3xl" />
+      <div className="pointer-events-none fixed bottom-0 left-0 h-64 w-64 rounded-full bg-violet-300/15 blur-3xl" />
 
-      <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-lg font-semibold">Search</h2>
-        <div className="flex flex-col gap-2 sm:flex-row">
-          <input
-            className="w-full rounded border border-gray-300 px-3 py-2"
-            placeholder="Search by title or URL"
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                void handleSearch();
-              }
-            }}
-          />
-          <button className="rounded bg-blue-600 px-4 py-2 text-white" onClick={() => void handleSearch()}>
-            Search
-          </button>
-          <button
-            className="rounded border border-gray-300 px-4 py-2"
-            onClick={() => {
-              setSearchQuery('');
-              setSearchResults([]);
-              void refreshList();
-            }}
-          >
-            Clear
-          </button>
-        </div>
-      </section>
-
-      <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-lg font-semibold">Create</h2>
-        <form className="grid gap-2 md:grid-cols-4" onSubmit={(event) => void handleCreate(event)}>
-          <select
-            className="rounded border border-gray-300 px-3 py-2"
-            value={createType}
-            onChange={(event) => setCreateType(event.target.value as 'bookmark' | 'folder')}
-          >
-            <option value="bookmark">Bookmark</option>
-            <option value="folder">Folder</option>
-          </select>
-
-          <input
-            className="rounded border border-gray-300 px-3 py-2"
-            placeholder="Title"
-            value={createTitle}
-            onChange={(event) => setCreateTitle(event.target.value)}
-          />
-
-          <input
-            className="rounded border border-gray-300 px-3 py-2"
-            placeholder="https://example.com"
-            value={createUrl}
-            onChange={(event) => setCreateUrl(event.target.value)}
-            disabled={createType === 'folder'}
-          />
-
-          <select
-            className="rounded border border-gray-300 px-3 py-2"
-            value={createParentId}
-            onChange={(event) => setCreateParentId(event.target.value)}
-          >
-            <option value="">Default folder</option>
-            {folders.map((folder) => (
-              <option key={folder.id} value={folder.id}>
-                {folder.title || '(Untitled Folder)'}
-              </option>
-            ))}
-          </select>
-
-          <button className="rounded bg-green-600 px-4 py-2 text-white md:col-span-4" type="submit">
-            Create
-          </button>
-        </form>
-      </section>
-
-      {loading && <div className="rounded border border-blue-200 bg-blue-50 p-3 text-sm text-blue-700">Loading...</div>}
-      {error && <div className="rounded border border-red-200 bg-red-50 p-3 text-sm text-red-700">{error}</div>}
-      {success && <div className="rounded border border-green-200 bg-green-50 p-3 text-sm text-green-700">{success}</div>}
-
-      <section className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
-        <h2 className="mb-3 text-lg font-semibold">Items</h2>
-        {shownNodes.length === 0 && !loading ? (
-          <div className="rounded border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
-            {isSearching ? 'No search result found' : 'No bookmarks found'}
+      <div className="relative mx-auto max-w-4xl space-y-5">
+        {/* ── page header ── */}
+        <Fade className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-600 shadow-lg shadow-indigo-400/30">
+            <Settings2 className="size-5 text-white" />
           </div>
-        ) : (
-          <div className="space-y-2">{renderNodes(shownNodes)}</div>
-        )}
-      </section>
+          <div>
+            <h1 className="text-xl font-bold tracking-tight text-slate-900">Bookmark Manager</h1>
+            <p className="text-sm text-slate-500">Manage bookmarks and folders in one place.</p>
+          </div>
+        </Fade>
+
+        {/* ── search + create grid ── */}
+        <div className="grid gap-4 md:grid-cols-2">
+          {/* search card */}
+          <Fade delay={50} className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-sm backdrop-blur">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <Search className="size-4 text-indigo-500" />
+              Search
+            </h2>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
+                <input
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50/80 py-2 pl-8 pr-3 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200/50 transition"
+                  placeholder="Search by title or URL"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') void handleSearch(); }}
+                />
+              </div>
+              <Button
+                className="rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-700 shadow-sm"
+                onClick={() => void handleSearch()}
+                hoverScale={1.04} tapScale={0.95}
+              >
+                {loading ? <Loader2 className="size-4 animate-spin" /> : 'Search'}
+              </Button>
+              <Button
+                className="rounded-xl border border-slate-200 bg-white px-3 text-slate-600 hover:bg-slate-50"
+                onClick={() => { setSearchQuery(''); setSearchResults([]); void refreshList(); }}
+                hoverScale={1.04} tapScale={0.96}
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+          </Fade>
+
+          {/* create card */}
+          <Fade delay={100} className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-sm backdrop-blur">
+            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
+              <Plus className="size-4 text-indigo-500" />
+              Create
+            </h2>
+            <form className="space-y-2" onSubmit={(e) => void handleCreate(e)}>
+              <div className="flex gap-2">
+                <select
+                  className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-sm text-slate-700 outline-none focus:border-indigo-300 transition"
+                  value={createType}
+                  onChange={(e) => setCreateType(e.target.value as 'bookmark' | 'folder')}
+                >
+                  <option value="bookmark">Bookmark</option>
+                  <option value="folder">Folder</option>
+                </select>
+                <select
+                  className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-sm text-slate-700 outline-none focus:border-indigo-300 transition"
+                  value={createParentId}
+                  onChange={(e) => setCreateParentId(e.target.value)}
+                >
+                  <option value="">Default folder</option>
+                  {folders.map((folder) => (
+                    <option key={folder.id} value={folder.id}>
+                      {folder.title || '(Untitled Folder)'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <input
+                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200/50 transition"
+                placeholder="Title"
+                value={createTitle}
+                onChange={(e) => setCreateTitle(e.target.value)}
+              />
+              {createType === 'bookmark' && (
+                <input
+                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200/50 transition"
+                  placeholder="https://example.com"
+                  value={createUrl}
+                  onChange={(e) => setCreateUrl(e.target.value)}
+                />
+              )}
+              <Button
+                className="w-full justify-center gap-1.5 rounded-xl bg-linear-to-r from-indigo-600 to-violet-600 py-2 text-sm font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500"
+                type="submit"
+                disabled={loading}
+                hoverScale={1.02} tapScale={0.97}
+              >
+                {loading ? <Loader2 className="size-4 animate-spin" /> : (
+                  createType === 'folder' ? <FolderPlus className="size-4" /> : <Plus className="size-4" />
+                )}
+                Create {createType === 'folder' ? 'Folder' : 'Bookmark'}
+              </Button>
+            </form>
+          </Fade>
+        </div>
+
+        {/* ── toast notifications ── */}
+        <AnimatePresence>
+          {error && (
+            <motion.div
+              key="err"
+              className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50/90 px-4 py-3 text-sm text-red-700 shadow-sm backdrop-blur"
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+            >
+              <BookmarkX className="size-4 shrink-0 text-red-500" />
+              <span className="flex-1">{error}</span>
+              <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600">
+                <X className="size-4" />
+              </button>
+            </motion.div>
+          )}
+          {success && (
+            <motion.div
+              key="ok"
+              className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-700 shadow-sm backdrop-blur"
+              initial={{ opacity: 0, y: -8, scale: 0.98 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.98 }}
+              transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+            >
+              <Check className="size-4 shrink-0 text-emerald-500" />
+              <span className="flex-1">{success}</span>
+              <button onClick={() => setSuccess(null)} className="text-emerald-400 hover:text-emerald-600">
+                <X className="size-4" />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── bookmark list section ── */}
+        <Fade delay={150} className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-sm backdrop-blur">
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              {isSearching ? (
+                <>
+                  <Search className="size-4 text-indigo-500" />
+                  Search Results
+                </>
+              ) : (
+                <>
+                  <Bookmark className="size-4 text-indigo-500" />
+                  All Bookmarks
+                  <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">
+                    <SlidingNumber number={shownNodes.length} fromNumber={0} initiallyStable className="tabular-nums" />
+                  </span>
+                </>
+              )}
+            </h2>
+            <Button
+              className="gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700"
+              onClick={() => void refreshList()}
+              disabled={loading}
+              hoverScale={1.04} tapScale={0.95}
+            >
+              {loading ? <Loader2 className="size-3 animate-spin" /> : <RotateCcw className="size-3" />}
+              Refresh
+            </Button>
+          </div>
+
+          {loading && shownNodes.length === 0 ? (
+            <div className="space-y-3">
+              {Array.from({ length: 4 }).map((_, i) => (
+                <motion.div
+                  key={i}
+                  className="h-16 animate-pulse rounded-2xl bg-slate-100"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  transition={{ delay: i * 0.05 }}
+                />
+              ))}
+            </div>
+          ) : shownNodes.length === 0 ? (
+            <motion.div
+              className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 py-12 text-center"
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+            >
+              <Bookmark className="size-10 text-slate-300" />
+              <div>
+                <p className="text-sm font-medium text-slate-600">
+                  {isSearching ? 'No search results' : 'No bookmarks found'}
+                </p>
+                {!isSearching && (
+                  <p className="mt-0.5 text-xs text-slate-400">Create a bookmark to get started</p>
+                )}
+              </div>
+            </motion.div>
+          ) : (
+            <AnimatePresence>
+              <div className="space-y-2">
+                {renderNodes(shownNodes)}
+              </div>
+            </AnimatePresence>
+          )}
+        </Fade>
+
+        {/* ── chevron breadcrumb indicate nesting ── */}
+        <Fade delay={200} className="flex items-center gap-1.5 px-1 text-[11px] text-slate-400">
+          <ChevronRight className="size-3" />
+          <span>Indented items are nested inside their parent folder.</span>
+        </Fade>
+      </div>
     </main>
   );
 }
