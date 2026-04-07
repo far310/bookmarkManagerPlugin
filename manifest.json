@@ -1,25 +1,24 @@
 {
   "manifest_version": 3,
-  "name": "name in manifest.json",
-  "description": "description in manifest.json",
-  "options_ui": {
-    "page": "src/pages/options/index.html"
-  },
+  "name": "书签搜索管理",
+  "description": "快速搜索和管理浏览器书签，支持浏览历史检索，优化的书签组织界面",
   "action": {
     "default_popup": "src/pages/popup/index.html",
     "default_icon": {
+      "16": "icon-16.png",
+      "48": "icon-48.png",
       "32": "icon-32.png"
     }
   },
-  "chrome_url_overrides": {
-    "newtab": "src/pages/newtab/index.html"
-  },
   "icons": {
+    "16": "icon-16.png",
+    "32": "icon-32.png",
+    "48": "icon-48.png",
     "128": "icon-128.png"
   },
   "permissions": [
-    "activeTab",
-    "bookmarks"
+    "bookmarks",
+    "history"
   ],
   "content_scripts": [
     {
@@ -42,6 +41,8 @@
       "resources": [
         "contentStyle.css",
         "icon-128.png",
+        "icon-16.png",
+        "icon-48.png",
         "icon-32.png"
       ],
       "matches": []

@@ -1,9 +1,17 @@
 {
   "action": {
-    "default_icon": "public/dev-icon-32.png",
+    "default_icon": {
+      "16": "public/dev-icon-16.png",
+      "32": "public/dev-icon-32.png",
+      "48": "public/dev-icon-48.png",
+      "128": "public/dev-icon-128.png"
+    },
     "default_popup": "src/pages/popup/index.html"
   },
   "icons": {
+    "16": "public/dev-icon-16.png",
+    "32": "public/dev-icon-32.png",
+    "48": "public/dev-icon-48.png",
     "128": "public/dev-icon-128.png"
   },
   "web_accessible_resources": [
@@ -11,6 +19,8 @@
       "resources": [
         "contentStyle.css",
         "dev-icon-128.png",
+        "dev-icon-16.png",
+        "dev-icon-48.png",
         "dev-icon-32.png"
       ],
       "matches": []

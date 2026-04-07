@@ -2,24 +2,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { Search, X, Bookmark, Folder, Star, Clock, ExternalLink, BookmarkX, Loader2 } from 'lucide-react';
 import '@pages/newtab/Newtab.css';
-import { ApiResponse, BookmarkAction, BookmarkNode } from '@src/types/bookmark';
+import { useBookmarkSearch } from '@src/hooks/use-bookmark-search';
+import { useBookmarkTree } from '@src/hooks/use-bookmark-tree';
+import { BookmarkNode } from '@src/types/bookmark';
 import { Button } from '@src/components/animate-ui/components/buttons/button';
 import { Fade } from '@src/components/animate-ui/primitives/effects/fade';
 import { Blur } from '@src/components/animate-ui/primitives/effects/blur';
 import { SlidingNumber } from '@src/components/animate-ui/primitives/texts/sliding-number';
-
-function sendAction<T>(action: BookmarkAction): Promise<ApiResponse<T>> {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(action, (response: ApiResponse<T>) => {
-      const runtimeError = chrome.runtime.lastError;
-      if (runtimeError) {
-        reject(new Error(runtimeError.message || 'Background communication failed'));
-        return;
-      }
-      resolve(response);
-    });
-  });
-}
 
 function flattenBookmarks(nodes: BookmarkNode[]): BookmarkNode[] {
   const result: BookmarkNode[] = [];
@@ -41,13 +30,18 @@ function getGreeting(): string {
 }
 
 export default function Newtab() {
-  const [tree, setTree] = useState<BookmarkNode[]>([]);
+  const { tree, loading: treeLoading, loadTree: fetchTree } = useBookmarkTree();
+  const {
+    results: searchResults,
+    loading: searchLoading,
+    searchBookmarks,
+    clearResults,
+  } = useBookmarkSearch({ filter: (node) => !!node.url });
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<BookmarkNode[]>([]);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [now, setNow] = useState(new Date());
 
+  const loading = treeLoading || searchLoading;
   const isSearching = searchQuery.trim().length > 0;
   const allBookmarks = useMemo(() => flattenBookmarks(tree), [tree]);
 
@@ -62,14 +56,14 @@ export default function Newtab() {
   }, []);
 
   useEffect(() => {
-    void loadTree();
+    void loadInitialTree();
   }, []);
 
   useEffect(() => {
     const query = searchQuery.trim();
     const timerId = window.setTimeout(() => {
       if (!query) {
-        setSearchResults([]);
+        clearResults();
         return;
       }
       void handleSearch(query);
@@ -77,31 +71,21 @@ export default function Newtab() {
     return () => window.clearTimeout(timerId);
   }, [searchQuery]);
 
-  async function loadTree() {
-    setLoading(true);
+  async function loadInitialTree() {
     setError(null);
     try {
-      const response = await sendAction<BookmarkNode[]>({ type: 'LIST_BOOKMARKS' });
-      if (!response.ok) { setError(response.error); return; }
-      setTree(response.data);
+      await fetchTree();
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load bookmarks');
-    } finally {
-      setLoading(false);
     }
   }
 
   async function handleSearch(query: string) {
-    setLoading(true);
     setError(null);
     try {
-      const response = await sendAction<BookmarkNode[]>({ type: 'SEARCH_BOOKMARKS', payload: { query } });
-      if (!response.ok) { setError(response.error); return; }
-      setSearchResults(response.data.filter((n) => !!n.url));
+      await searchBookmarks(query);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Search failed');
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -138,7 +122,7 @@ export default function Newtab() {
               placeholder="Search bookmarks…"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Escape') { setSearchQuery(''); setSearchResults([]); } }}
+              onKeyDown={(e) => { if (e.key === 'Escape') { setSearchQuery(''); clearResults(); } }}
             />
             {searchQuery && (
               <motion.button
@@ -146,7 +130,7 @@ export default function Newtab() {
                 animate={{ scale: 1, opacity: 1 }}
                 exit={{ scale: 0.7, opacity: 0 }}
                 className="text-white/40 hover:text-white/70 transition"
-                onClick={() => { setSearchQuery(''); setSearchResults([]); }}
+                onClick={() => { setSearchQuery(''); clearResults(); }}
               >
                 <X className="size-4" />
               </motion.button>

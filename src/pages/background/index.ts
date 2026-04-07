@@ -1,4 +1,10 @@
-import { ApiResponse, BookmarkAction, BookmarkNode } from '@src/types/bookmark';
+import {
+	ApiResponse,
+	BookmarkAction,
+	BookmarkNode,
+	BookmarkTransferNode,
+	BrowserHistoryItem,
+} from '@src/types/bookmark';
 
 function ok<T>(data: T): ApiResponse<T> {
 	return { ok: true, data };
@@ -18,6 +24,54 @@ function toBookmarkNode(node: chrome.bookmarks.BookmarkTreeNode): BookmarkNode {
 		dateAdded: node.dateAdded,
 		children: node.children?.map(toBookmarkNode),
 	};
+}
+
+function toTransferNode(node: chrome.bookmarks.BookmarkTreeNode): BookmarkTransferNode {
+	return {
+		title: node.title,
+		url: node.url,
+		children: node.children?.map(toTransferNode),
+	};
+}
+
+function toHistoryItem(item: chrome.history.HistoryItem): BrowserHistoryItem | null {
+	if (!item.url) {
+		return null;
+	}
+
+	return {
+		id: item.id,
+		title: item.title || item.url,
+		url: item.url,
+		lastVisitTime: item.lastVisitTime,
+		visitCount: item.visitCount,
+	};
+}
+
+function isValidUrl(url: string): boolean {
+	return /^https?:\/\//.test(url);
+}
+
+function validateTransferNode(node: BookmarkTransferNode, path: string): string | null {
+	if (!node.title?.trim()) {
+		return `Missing title at ${path}`;
+	}
+
+	if (node.url && !isValidUrl(node.url.trim())) {
+		return `Bookmark URL must start with http:// or https:// at ${path}`;
+	}
+
+	if (node.children) {
+		for (let index = 0; index < node.children.length; index += 1) {
+			const nestedPath = `${path}.children[${index}]`;
+			const message = validateTransferNode(node.children[index], nestedPath);
+			if (message) {
+				return message;
+			}
+		}
+	}
+
+	return null;
 }
 
 function wrapChromeCall<T>(
@@ -44,6 +98,24 @@ function searchBookmarks(query: string): Promise<chrome.bookmarks.BookmarkTreeNo
 	return wrapChromeCall(
 		(cb) => chrome.bookmarks.search(query, cb),
 		'Failed to search bookmarks',
+	);
+}
+
+function searchBrowserHistory(
+	query: string,
+	maxResults = 30,
+): Promise<chrome.history.HistoryItem[]> {
+	return wrapChromeCall(
+		(cb) =>
+			chrome.history.search(
+				{
+					text: query,
+					startTime: 0,
+					maxResults,
+				},
+				cb,
+			),
+		'Failed to search browser history',
 	);
 }
 
@@ -89,11 +161,49 @@ function removeBookmarkTree(id: string): Promise<void> {
 	});
 }
 
+async function importTransferNode(
+	node: BookmarkTransferNode,
+	parentId: string,
+): Promise<{ importedBookmarks: number; importedFolders: number }> {
+	if (node.url) {
+		await createBookmark({
+			title: node.title.trim(),
+			url: node.url.trim(),
+			parentId,
+		});
+		return { importedBookmarks: 1, importedFolders: 0 };
+	}
+
+	const createdFolder = await createBookmark({
+		title: node.title.trim(),
+		parentId,
+	});
+
+	let importedBookmarks = 0;
+	let importedFolders = 1;
+	for (const childNode of node.children ?? []) {
+		const nested = await importTransferNode(childNode, createdFolder.id);
+		importedBookmarks += nested.importedBookmarks;
+		importedFolders += nested.importedFolders;
+	}
+
+	return { importedBookmarks, importedFolders };
+}
+
 async function handleAction(action: BookmarkAction): Promise<ApiResponse<unknown>> {
 	switch (action.type) {
 		case 'LIST_BOOKMARKS': {
 			const tree = await getTree();
 			return ok(tree.map(toBookmarkNode));
+		}
+
+		case 'EXPORT_BOOKMARKS': {
+			const tree = await getTree();
+			const rootChildren = tree.flatMap((item) => item.children ?? []);
+			return ok({
+				exportedAt: new Date().toISOString(),
+				nodes: rootChildren.map(toTransferNode),
+			});
 		}
 
 		case 'SEARCH_BOOKMARKS': {
@@ -103,6 +213,50 @@ async function handleAction(action: BookmarkAction): Promise<ApiResponse<unknown
 			}
 			const matches = await searchBookmarks(query);
 			return ok(matches.map(toBookmarkNode));
+		}
+
+		case 'SEARCH_BROWSER_HISTORY': {
+			const query = action.payload.query.trim();
+			if (!query) {
+				return fail('Search query is required');
+			}
+
+			const maxResults = Math.min(Math.max(action.payload.maxResults ?? 30, 1), 100);
+			const matches = await searchBrowserHistory(query, maxResults);
+			return ok(matches.map(toHistoryItem).filter((item): item is BrowserHistoryItem => item !== null));
+		}
+
+		case 'IMPORT_BOOKMARKS': {
+			const { nodes, parentId } = action.payload;
+			if (!Array.isArray(nodes) || nodes.length === 0) {
+				return fail('Import data is empty');
+			}
+
+			for (let index = 0; index < nodes.length; index += 1) {
+				const path = `nodes[${index}]`;
+				const message = validateTransferNode(nodes[index], path);
+				if (message) {
+					return fail(message);
+				}
+			}
+
+			const tree = await getTree();
+			const fallbackParentId = tree[0]?.children?.[0]?.id;
+			const resolvedParentId = parentId?.trim() || fallbackParentId;
+			if (!resolvedParentId) {
+				return fail('Unable to resolve target folder for import');
+			}
+
+			let importedBookmarks = 0;
+			let importedFolders = 0;
+
+			for (const node of nodes) {
+				const imported = await importTransferNode(node, resolvedParentId);
+				importedBookmarks += imported.importedBookmarks;
+				importedFolders += imported.importedFolders;
+			}
+
+			return ok({ importedBookmarks, importedFolders });
 		}
 
 		case 'CREATE_BOOKMARK': {
