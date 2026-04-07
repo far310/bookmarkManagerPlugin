@@ -1,57 +1,147 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import {
-  Search, X, Plus, FolderPlus, Bookmark, Folder,
-  Pencil, Trash2, FolderInput, Check, BookmarkX,
-  ChevronRight, Settings2, RotateCcw, Loader2,
+  Bookmark,
+  BookmarkX,
+  Check,
+  Copy,
+  ExternalLink,
+  Folder,
+  FolderInput,
+  FolderPlus,
+  Download,
+  FileJson,
+  Loader2,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  Settings2,
+  Sparkles,
+  Trash2,
+  Upload,
+  X,
 } from 'lucide-react';
-import '@pages/options/Options.css';
-import { ApiResponse, BookmarkAction, BookmarkNode } from '@src/types/bookmark';
-import { Button } from '@src/components/animate-ui/components/buttons/button';
-import { Fade } from '@src/components/animate-ui/primitives/effects/fade';
-import { SlidingNumber } from '@src/components/animate-ui/primitives/texts/sliding-number';
+import { bookmarkApi } from '@src/lib/bookmarks/api';
+import { useBookmarkMutations } from '@src/hooks/use-bookmark-mutations';
+import { useBookmarkSearch } from '@src/hooks/use-bookmark-search';
+import { useBookmarkTree } from '@src/hooks/use-bookmark-tree';
+import { flattenFolders, folderIds, isRootNode, stripFirstLayer } from '@src/lib/bookmarks/tree';
+import { BookmarkNode, BookmarkTransferNode } from '@src/types/bookmark';
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@src/components/ui/alert';
+import { Badge } from '@src/components/ui/badge';
+import { Button } from '@src/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@src/components/ui/card';
+import { Input } from '@src/components/ui/input';
+import { InputGroup, InputGroupAddon } from '@src/components/ui/input-group';
+import { ScrollArea } from '@src/components/ui/scroll-area';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@src/components/ui/select';
+import { Separator } from '@src/components/ui/separator';
+import { Skeleton } from '@src/components/ui/skeleton';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@src/components/ui/tabs';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuLabel,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
+  ContextMenuTrigger,
+} from '@src/components/ui/context-menu';
+import {
+  Files,
+  FolderContent,
+  FolderItem,
+  FolderTrigger,
+  SubFiles,
+} from '@src/components/animate-ui/components/radix/files';
 
-function sendAction<T>(action: BookmarkAction): Promise<ApiResponse<T>> {
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage(action, (response: ApiResponse<T>) => {
-      const runtimeError = chrome.runtime.lastError;
-      if (runtimeError) {
-        reject(new Error(runtimeError.message || 'Failed to communicate with background'));
-        return;
-      }
-      resolve(response);
-    });
-  });
+function highlightText(text: string, query: string): React.ReactNode {
+  const normalizedQuery = query.trim();
+  if (!normalizedQuery) {
+    return text;
+  }
+
+  const lowerText = text.toLowerCase();
+  const lowerQuery = normalizedQuery.toLowerCase();
+  const segments: React.ReactNode[] = [];
+  let start = 0;
+  let key = 0;
+
+  while (start < text.length) {
+    const foundAt = lowerText.indexOf(lowerQuery, start);
+    if (foundAt === -1) {
+      segments.push(text.slice(start));
+      break;
+    }
+
+    if (foundAt > start) {
+      segments.push(text.slice(start, foundAt));
+    }
+
+    segments.push(
+      <mark key={`hl-${key++}`} className="rounded bg-amber-200 px-0.5 text-amber-950">
+        {text.slice(foundAt, foundAt + normalizedQuery.length)}
+      </mark>,
+    );
+
+    start = foundAt + normalizedQuery.length;
+  }
+
+  return segments;
 }
 
-function flattenFolders(nodes: BookmarkNode[]): BookmarkNode[] {
-  const result: BookmarkNode[] = [];
-
-  const walk = (list: BookmarkNode[]) => {
-    list.forEach((node) => {
-      const isFolder = !node.url;
-      if (isFolder && node.parentId !== undefined) {
-        result.push(node);
-      }
-      if (node.children && node.children.length > 0) {
-        walk(node.children);
-      }
-    });
-  };
-
-  walk(nodes);
-  return result;
+function createExportFileName(): string {
+  const now = new Date();
+  const datePart = now.toISOString().slice(0, 10);
+  return `bookmarks-export-${datePart}.json`;
 }
 
-function isRootNode(node: BookmarkNode): boolean {
-  return node.parentId === undefined;
+function parseImportNodes(raw: string): BookmarkTransferNode[] {
+  const parsed = JSON.parse(raw) as unknown;
+
+  if (Array.isArray(parsed)) {
+    return parsed as BookmarkTransferNode[];
+  }
+
+  if (
+    typeof parsed === 'object' &&
+    parsed !== null &&
+    'nodes' in parsed &&
+    Array.isArray((parsed as { nodes: unknown }).nodes)
+  ) {
+    return (parsed as { nodes: BookmarkTransferNode[] }).nodes;
+  }
+
+  throw new Error('Import JSON must be an array or an object with a nodes array');
 }
 
 export default function Options() {
-  const [tree, setTree] = useState<BookmarkNode[]>([]);
-  const [searchResults, setSearchResults] = useState<BookmarkNode[]>([]);
+  const { tree, loading: treeLoading, loadTree } = useBookmarkTree();
+  const {
+    results: searchResults,
+    loading: searchLoading,
+    searchBookmarks,
+    clearResults,
+  } = useBookmarkSearch();
+  const {
+    createLoading,
+    actionPendingId,
+    createBookmark,
+    renameBookmark,
+    moveBookmark,
+    deleteBookmark,
+  } = useBookmarkMutations();
+
   const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -62,38 +152,86 @@ export default function Options() {
 
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
-  const [actionPendingId, setActionPendingId] = useState<string | null>(null);
-  const [moveTargets, setMoveTargets] = useState<Record<string, string>>({});
+  const [openFolders, setOpenFolders] = useState<string[]>([]);
+  const [transferLoading, setTransferLoading] = useState(false);
+  const [importParentId, setImportParentId] = useState('');
+  const [importFileName, setImportFileName] = useState('');
+  const importInputRef = useRef<HTMLInputElement | null>(null);
 
+  const loading = treeLoading || searchLoading || createLoading;
+  const pageBusy = loading || transferLoading;
   const isSearching = searchQuery.trim().length > 0;
-  const shownNodes = isSearching ? searchResults : tree;
+  const visibleTree = useMemo(() => stripFirstLayer(tree), [tree]);
+  const shownNodes = isSearching ? searchResults : visibleTree;
   const folders = useMemo(() => flattenFolders(tree), [tree]);
+
+  const summary = useMemo(() => {
+    let bookmarkCount = 0;
+    let folderCount = 0;
+
+    const walk = (nodes: BookmarkNode[]) => {
+      nodes.forEach((node) => {
+        if (node.url) {
+          bookmarkCount += 1;
+        } else {
+          folderCount += 1;
+        }
+        if (node.children?.length) {
+          walk(node.children);
+        }
+      });
+    };
+
+    walk(visibleTree);
+    return { bookmarkCount, folderCount };
+  }, [visibleTree]);
 
   useEffect(() => {
     void refreshList();
   }, []);
 
+  useEffect(() => {
+    if (!success) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => setSuccess(null), 2800);
+    return () => window.clearTimeout(timer);
+  }, [success]);
+
   async function refreshList() {
-    setLoading(true);
     setError(null);
+
     try {
-      const response = await sendAction<BookmarkNode[]>({ type: 'LIST_BOOKMARKS' });
-      if (!response.ok) {
-        setError(response.error);
-        return;
-      }
-      setTree(response.data);
-      if (!createParentId && response.data.length > 0) {
-        const defaultFolder = flattenFolders(response.data)[0];
+      const nextTree = await loadTree();
+      const ids = folderIds(stripFirstLayer(nextTree));
+      setOpenFolders((prev) => {
+        if (prev.length === 0) {
+          return ids;
+        }
+
+        const prevSet = new Set(prev);
+        const persisted = ids.filter((id) => prevSet.has(id));
+        const appended = ids.filter((id) => !prevSet.has(id));
+        return [...persisted, ...appended];
+      });
+
+      if (!createParentId && nextTree.length > 0) {
+        const defaultFolder = flattenFolders(nextTree)[0];
         if (defaultFolder) {
           setCreateParentId(defaultFolder.id);
+        }
+      }
+
+      if (!importParentId && nextTree.length > 0) {
+        const defaultFolder = flattenFolders(nextTree)[0];
+        if (defaultFolder) {
+          setImportParentId(defaultFolder.id);
         }
       }
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Failed to load bookmarks';
       setError(message);
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -109,30 +247,18 @@ export default function Options() {
   async function handleSearch() {
     const query = searchQuery.trim();
     if (!query) {
-      setSearchResults([]);
+      clearResults();
       await refreshList();
       return;
     }
 
-    setLoading(true);
     setError(null);
+
     try {
-      const response = await sendAction<BookmarkNode[]>({
-        type: 'SEARCH_BOOKMARKS',
-        payload: { query },
-      });
-
-      if (!response.ok) {
-        setError(response.error);
-        return;
-      }
-
-      setSearchResults(response.data);
+      await searchBookmarks(query);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Search failed';
       setError(message);
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -151,21 +277,12 @@ export default function Options() {
       return;
     }
 
-    setLoading(true);
     try {
-      const response = await sendAction<BookmarkNode>({
-        type: 'CREATE_BOOKMARK',
-        payload: {
-          title: createTitle,
-          url: createType === 'bookmark' ? createUrl : undefined,
-          parentId: createParentId || undefined,
-        },
+      await createBookmark({
+        title: createTitle,
+        url: createType === 'bookmark' ? createUrl : undefined,
+        parentId: createParentId || undefined,
       });
-
-      if (!response.ok) {
-        setError(response.error);
-        return;
-      }
 
       setCreateTitle('');
       setCreateUrl('');
@@ -174,8 +291,6 @@ export default function Options() {
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Create operation failed';
       setError(message);
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -185,27 +300,17 @@ export default function Options() {
       return;
     }
 
-    setActionPendingId(node.id);
     setError(null);
     setSuccess(null);
-    try {
-      const response = await sendAction<{ id: string }>({
-        type: 'DELETE_BOOKMARK',
-        payload: { id: node.id },
-      });
 
-      if (!response.ok) {
-        setError(response.error);
-        return;
-      }
+    try {
+      await deleteBookmark(node.id);
 
       setSuccess('Item deleted');
       await refreshCurrentView();
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Delete operation failed';
       setError(message);
-    } finally {
-      setActionPendingId(null);
     }
   }
 
@@ -215,19 +320,11 @@ export default function Options() {
       return;
     }
 
-    setActionPendingId(node.id);
     setError(null);
     setSuccess(null);
-    try {
-      const response = await sendAction<BookmarkNode>({
-        type: 'RENAME_BOOKMARK',
-        payload: { id: node.id, title: editingTitle },
-      });
 
-      if (!response.ok) {
-        setError(response.error);
-        return;
-      }
+    try {
+      await renameBookmark(node.id, editingTitle);
 
       setEditingId(null);
       setEditingTitle('');
@@ -236,433 +333,645 @@ export default function Options() {
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Rename operation failed';
       setError(message);
-    } finally {
-      setActionPendingId(null);
     }
   }
 
-  async function handleMove(node: BookmarkNode) {
-    const targetFolderId = moveTargets[node.id];
-    if (!targetFolderId) {
-      setError('Choose a target folder');
-      return;
-    }
-
-    setActionPendingId(node.id);
+  async function handleMoveToFolder(node: BookmarkNode, parentId: string) {
     setError(null);
     setSuccess(null);
+
     try {
-      const response = await sendAction<BookmarkNode>({
-        type: 'MOVE_BOOKMARK',
-        payload: { id: node.id, parentId: targetFolderId },
-      });
-
-      if (!response.ok) {
-        setError(response.error);
-        return;
-      }
-
+      await moveBookmark(node.id, parentId);
       setSuccess('Item moved');
       await refreshCurrentView();
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Move operation failed';
       setError(message);
-    } finally {
-      setActionPendingId(null);
     }
   }
 
-  function renderNodes(nodes: BookmarkNode[], depth = 0): React.ReactNode {
-    return nodes.map((node, idx) => {
+  async function handleExportBookmarks() {
+    setError(null);
+    setSuccess(null);
+    setTransferLoading(true);
+
+    try {
+      const exported = await bookmarkApi.exportBookmarks();
+      const payload = JSON.stringify(exported, null, 2);
+      const blob = new Blob([payload], { type: 'application/json' });
+      const objectUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = objectUrl;
+      anchor.download = createExportFileName();
+      anchor.click();
+      URL.revokeObjectURL(objectUrl);
+
+      setSuccess(`Export completed: ${exported.nodes.length} top-level nodes`);
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : 'Export failed';
+      setError(message);
+    } finally {
+      setTransferLoading(false);
+    }
+  }
+
+  async function handleImportFile(event: React.ChangeEvent<HTMLInputElement>) {
+    const selectedFile = event.target.files?.[0];
+    if (!selectedFile) {
+      return;
+    }
+
+    setImportFileName(selectedFile.name);
+    setError(null);
+    setSuccess(null);
+    setTransferLoading(true);
+
+    try {
+      const fileContent = await selectedFile.text();
+      const nodes = parseImportNodes(fileContent);
+      const imported = await bookmarkApi.importBookmarks({
+        nodes,
+        parentId: importParentId || undefined,
+      });
+
+      event.target.value = '';
+      await refreshCurrentView();
+      setSuccess(
+        `Import completed: ${imported.importedBookmarks} bookmarks, ${imported.importedFolders} folders`,
+      );
+    } catch (caughtError) {
+      const message = caughtError instanceof Error ? caughtError.message : 'Import failed';
+      setError(message);
+    } finally {
+      setTransferLoading(false);
+    }
+  }
+
+  function renderContextMenu(node: BookmarkNode, content: React.ReactNode): React.ReactNode {
+    const isRoot = isRootNode(node);
+    if (isRoot) {
+      return content;
+    }
+
+    const availableFolders = folders.filter((folder) => folder.id !== node.id);
+
+    return (
+      <ContextMenu key={node.id}>
+        <ContextMenuTrigger className="block">{content}</ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuLabel className="text-xs font-semibold text-zinc-500">
+            {node.title || '(Untitled)'}
+          </ContextMenuLabel>
+          <ContextMenuSeparator />
+          {node.url && (
+            <>
+              <ContextMenuItem onClick={() => window.open(node.url, '_blank', 'noopener,noreferrer')}>
+                <ExternalLink className="size-4" />
+                在新标签页打开
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => void navigator.clipboard.writeText(node.url!)}>
+                <Copy className="size-4" />
+                复制链接
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+            </>
+          )}
+          <ContextMenuItem
+            onClick={() => {
+              setEditingId(node.id);
+              setEditingTitle(node.title);
+            }}
+          >
+            <Pencil className="size-4" />
+            重命名
+          </ContextMenuItem>
+
+          {availableFolders.length > 0 && (
+            <ContextMenuSub>
+              <ContextMenuSubTrigger>
+                <FolderInput className="size-4" />
+                移动到文件夹
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent className="max-h-72 overflow-y-auto">
+                {availableFolders.map((folder) => (
+                  <ContextMenuItem key={folder.id} onClick={() => void handleMoveToFolder(node, folder.id)}>
+                    <Folder className="size-3.5 text-amber-500" />
+                    {folder.title || '(Untitled Folder)'}
+                  </ContextMenuItem>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+          )}
+
+          <ContextMenuSeparator />
+          <ContextMenuItem variant="destructive" onClick={() => void handleDelete(node)}>
+            <Trash2 className="size-4" />
+            删除
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+    );
+  }
+
+  function renderInlineRename(node: BookmarkNode): React.ReactNode {
+    const isPending = actionPendingId === node.id;
+    return (
+      <div className="flex items-center gap-2 border-t border-zinc-100 bg-zinc-50/60 px-3 py-2">
+        <Input
+          autoFocus
+          className="h-7 min-w-0 flex-1 text-sm"
+          value={editingTitle}
+          onChange={(e) => setEditingTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void handleRename(node);
+            if (e.key === 'Escape') {
+              setEditingId(null);
+              setEditingTitle('');
+            }
+          }}
+        />
+        <Button size="icon-xs" onClick={() => void handleRename(node)} disabled={isPending}>
+          {isPending ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
+        </Button>
+        <Button
+          size="icon-xs"
+          variant="outline"
+          onClick={() => {
+            setEditingId(null);
+            setEditingTitle('');
+          }}
+        >
+          <X className="size-3" />
+        </Button>
+      </div>
+    );
+  }
+
+  function renderLeafNode(node: BookmarkNode): React.ReactNode {
+    const isFolder = !node.url;
+    const isRoot = isRootNode(node);
+    const isEditing = editingId === node.id;
+
+    const card = (
+      <div
+        key={node.id}
+        className="group mb-1 overflow-hidden rounded-xl border border-zinc-200/80 bg-white/90 transition-colors hover:border-zinc-300 hover:shadow-sm"
+      >
+        <div className="flex items-center gap-3 px-3 py-2.5">
+          <span
+            className={`flex size-8 shrink-0 items-center justify-center rounded-lg ${
+              isFolder ? 'bg-amber-50 text-amber-600' : 'bg-indigo-50 text-indigo-600'
+            }`}
+          >
+            {isFolder ? <Folder className="size-4" /> : <Bookmark className="size-4" />}
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate text-sm font-medium text-zinc-900">
+              {highlightText(node.title || '(Untitled)', searchQuery)}
+            </span>
+            {node.url && (
+              <a
+                href={node.url}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-0.5 block truncate text-xs text-zinc-400 transition hover:text-indigo-600"
+                onClick={(e) => e.stopPropagation()}
+              >
+                {highlightText(node.url, searchQuery)}
+              </a>
+            )}
+          </span>
+          {!isRoot && !isEditing && (
+            <span className="invisible flex shrink-0 items-center gap-0.5 group-hover:visible">
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-zinc-400 hover:text-zinc-700"
+                onClick={() => {
+                  setEditingId(node.id);
+                  setEditingTitle(node.title);
+                }}
+                title="重命名"
+              >
+                <Pencil className="size-3" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon-xs"
+                className="text-zinc-400 hover:text-red-600"
+                onClick={() => void handleDelete(node)}
+                title="删除"
+              >
+                <Trash2 className="size-3" />
+              </Button>
+            </span>
+          )}
+        </div>
+        {isEditing && renderInlineRename(node)}
+      </div>
+    );
+
+    return renderContextMenu(node, card);
+  }
+
+  function renderTree(nodes: BookmarkNode[]): React.ReactNode {
+    return nodes.map((node) => {
       const isFolder = !node.url;
       const isRoot = isRootNode(node);
-      const isPending = actionPendingId === node.id;
-      const canShowChildren = !isSearching && !!node.children?.length;
+      const hasChildren = !!node.children?.length;
+      const isEditing = editingId === node.id;
 
-      return (
-        <motion.div
-          key={node.id}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, x: -12 }}
-          transition={{ duration: 0.2, delay: Math.min(idx * 0.03, 0.2) }}
-        >
-          <div
-            className="group relative overflow-hidden rounded-2xl border border-slate-200/80 bg-white/80 shadow-sm backdrop-blur transition hover:border-indigo-200 hover:shadow-md"
-            style={{ marginLeft: depth > 0 ? `${depth * 20}px` : undefined }}
+      if (isFolder && hasChildren && !isSearching) {
+        const folderCard = (
+          <FolderItem
+            key={node.id}
+            value={node.id}
+            className="group mb-1 overflow-hidden rounded-xl border border-zinc-200/80 bg-white/90 transition-colors hover:border-zinc-300 hover:shadow-sm"
           >
-            {/* left accent bar */}
-            <div
-              className={[
-                'absolute left-0 top-0 bottom-0 w-1 rounded-l-2xl',
-                isFolder ? 'bg-amber-400/60' : 'bg-indigo-500/60',
-              ].join(' ')}
-            />
-
-            <div className="flex flex-col gap-3 px-4 py-3 pl-5">
-              {/* top row: icon + title/url + type badge */}
-              <div className="flex items-start gap-3">
-                <div
-                  className={[
-                    'mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl shadow-sm',
-                    isFolder ? 'bg-amber-100' : 'bg-indigo-100',
-                  ].join(' ')}
-                >
-                  {isFolder ? (
-                    <Folder className="size-4 text-amber-600" />
-                  ) : (
-                    <Bookmark className="size-4 text-indigo-600" />
-                  )}
-                </div>
-
-                <div className="min-w-0 flex-1">
-                  {editingId === node.id ? (
-                    <div className="flex gap-2">
-                      <input
-                        autoFocus
-                        className="flex-1 rounded-xl border border-indigo-300 bg-indigo-50/60 px-3 py-1.5 text-sm text-slate-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200/50 transition"
-                        value={editingTitle}
-                        onChange={(e) => setEditingTitle(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') void handleRename(node);
-                          if (e.key === 'Escape') { setEditingId(null); setEditingTitle(''); }
-                        }}
-                      />
-                      <Button
-                        className="rounded-xl bg-indigo-600 px-3 text-xs font-semibold text-white hover:bg-indigo-700 gap-1"
-                        onClick={() => void handleRename(node)}
-                        disabled={isPending}
-                        hoverScale={1.04} tapScale={0.95}
-                      >
-                        {isPending ? <Loader2 className="size-3.5 animate-spin" /> : <Check className="size-3.5" />}
-                        Save
-                      </Button>
-                      <Button
-                        className="rounded-xl border border-slate-200 bg-white px-3 text-xs font-medium text-slate-600 hover:bg-slate-50"
-                        onClick={() => { setEditingId(null); setEditingTitle(''); }}
-                        hoverScale={1.03} tapScale={0.97}
-                      >
-                        Cancel
-                      </Button>
-                    </div>
-                  ) : (
-                    <>
-                      <div className="truncate text-sm font-semibold text-slate-900">
-                        {node.title || '(Untitled)'}
-                      </div>
-                      {node.url && (
-                        <a
-                          href={node.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="block truncate text-xs text-indigo-500 hover:text-indigo-700 hover:underline transition"
-                        >
-                          {node.url}
-                        </a>
-                      )}
-                    </>
-                  )}
-                </div>
-
-                {!isRoot && editingId !== node.id && (
-                  <span
-                    className={[
-                      'mt-1 shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium',
-                      isFolder ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700',
-                    ].join(' ')}
-                  >
-                    {isFolder ? 'Folder' : 'Bookmark'}
-                  </span>
-                )}
-              </div>
-
-              {/* action row */}
-              {!isRoot && editingId !== node.id && (
-                <div className="flex flex-wrap gap-2 border-t border-slate-100 pt-2">
+            <div className="flex items-center gap-2 px-2">
+              <FolderTrigger className="flex min-w-0 flex-1 items-center gap-3 py-2.5 pl-1 text-sm font-medium text-zinc-900">
+                <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-amber-50 text-amber-600">
+                  <Folder className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1 truncate">
+                  {highlightText(node.title || '(Untitled Folder)', searchQuery)}
+                </span>
+              </FolderTrigger>
+              {!isRoot && !isEditing && (
+                <span className="invisible flex shrink-0 items-center gap-0.5 pr-1 group-hover:visible">
                   <Button
-                    className="gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
-                    onClick={() => { setEditingId(node.id); setEditingTitle(node.title); }}
-                    disabled={isPending}
-                    hoverScale={1.04} tapScale={0.95}
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-zinc-400 hover:text-zinc-700"
+                    onClick={() => {
+                      setEditingId(node.id);
+                      setEditingTitle(node.title);
+                    }}
+                    title="重命名"
                   >
                     <Pencil className="size-3" />
-                    Rename
                   </Button>
-
-                  <div className="flex gap-1.5">
-                    <select
-                      className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-[11px] text-slate-700 outline-none focus:border-indigo-300 transition disabled:opacity-50"
-                      value={moveTargets[node.id] || ''}
-                      onChange={(e) => setMoveTargets((prev) => ({ ...prev, [node.id]: e.target.value }))}
-                      disabled={isPending}
-                    >
-                      <option value="">Move to…</option>
-                      {folders.map((folder) => (
-                        <option key={folder.id} value={folder.id}>
-                          {folder.title || '(Untitled Folder)'}
-                        </option>
-                      ))}
-                    </select>
-                    <Button
-                      className="gap-1 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-medium text-slate-700 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-700"
-                      onClick={() => void handleMove(node)}
-                      disabled={isPending}
-                      hoverScale={1.04} tapScale={0.95}
-                    >
-                      {isPending ? <Loader2 className="size-3 animate-spin" /> : <FolderInput className="size-3" />}
-                      Move
-                    </Button>
-                  </div>
-
                   <Button
-                    className="ml-auto gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-[11px] font-medium text-red-600 hover:bg-red-100 hover:border-red-300"
+                    variant="ghost"
+                    size="icon-xs"
+                    className="text-zinc-400 hover:text-red-600"
                     onClick={() => void handleDelete(node)}
-                    disabled={isPending}
-                    hoverScale={1.04} tapScale={0.95}
+                    title="删除"
                   >
-                    {isPending ? <Loader2 className="size-3 animate-spin text-red-600" /> : <Trash2 className="size-3" />}
-                    Delete
+                    <Trash2 className="size-3" />
                   </Button>
-                </div>
+                </span>
               )}
             </div>
-          </div>
+            {isEditing && renderInlineRename(node)}
+            <FolderContent className="px-2 pb-2">
+              <div className="rounded-lg border border-dashed border-zinc-200/60 bg-zinc-50/40 p-1.5">
+                <SubFiles className="w-full">
+                  {renderTree(node.children || [])}
+                </SubFiles>
+              </div>
+            </FolderContent>
+          </FolderItem>
+        );
 
-          {canShowChildren && (
-            <motion.div
-              className="mt-1.5 space-y-1.5"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              transition={{ delay: 0.05 }}
-            >
-              {renderNodes(node.children || [], depth + 1)}
-            </motion.div>
-          )}
-        </motion.div>
-      );
+        return renderContextMenu(node, folderCard);
+      }
+
+      return renderLeafNode(node);
     });
   }
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(ellipse_at_top_left,#eef2ff_0%,#f8fafc_50%,#f1f5f9_100%)] px-4 py-6 text-slate-900">
-      {/* ambient blobs */}
-      <div className="pointer-events-none fixed -top-32 -right-32 h-80 w-80 rounded-full bg-indigo-300/20 blur-3xl" />
-      <div className="pointer-events-none fixed bottom-0 left-0 h-64 w-64 rounded-full bg-violet-300/15 blur-3xl" />
-
-      <div className="relative mx-auto max-w-4xl space-y-5">
-        {/* ── page header ── */}
-        <Fade className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-indigo-600 shadow-lg shadow-indigo-400/30">
-            <Settings2 className="size-5 text-white" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight text-slate-900">Bookmark Manager</h1>
-            <p className="text-sm text-slate-500">Manage bookmarks and folders in one place.</p>
-          </div>
-        </Fade>
-
-        {/* ── search + create grid ── */}
-        <div className="grid gap-4 md:grid-cols-2">
-          {/* search card */}
-          <Fade delay={50} className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-sm backdrop-blur">
-            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <Search className="size-4 text-indigo-500" />
-              Search
-            </h2>
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-slate-400" />
-                <input
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50/80 py-2 pl-8 pr-3 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200/50 transition"
-                  placeholder="Search by title or URL"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') void handleSearch(); }}
-                />
+    <main className="min-h-screen bg-[radial-gradient(1200px_420px_at_50%_-12%,rgba(251,191,36,0.22),transparent),radial-gradient(900px_360px_at_100%_10%,rgba(34,211,238,0.18),transparent),linear-gradient(180deg,#fffdf5_0%,#fafafa_55%,#f4fbff_100%)] px-4 py-6 text-zinc-900 md:px-6">
+      <div className="mx-auto flex max-w-6xl flex-col gap-5">
+        <motion.section initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.28 }}>
+          <Card className="overflow-visible border-amber-200/70 bg-white/92 shadow-xl shadow-amber-100/40">
+            <CardHeader className="gap-3">
+              <div className="flex flex-wrap items-start justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="flex size-11 items-center justify-center rounded-xl bg-zinc-900 text-amber-300">
+                    <Settings2 className="size-5" />
+                  </div>
+                  <div>
+                    <CardTitle className="text-2xl tracking-tight">Bookmark Atelier</CardTitle>
+                    <CardDescription className="text-zinc-600">
+                      Editorial style workspace for organizing folders, links, and quick actions.
+                    </CardDescription>
+                  </div>
+                </div>
+                <Badge className="gap-1 bg-zinc-900 text-amber-300">
+                  <Sparkles className="size-3" />
+                  Refined Mode
+                </Badge>
               </div>
-              <Button
-                className="rounded-xl bg-indigo-600 px-4 text-sm font-semibold text-white hover:bg-indigo-700 shadow-sm"
-                onClick={() => void handleSearch()}
-                hoverScale={1.04} tapScale={0.95}
-              >
-                {loading ? <Loader2 className="size-4 animate-spin" /> : 'Search'}
-              </Button>
-              <Button
-                className="rounded-xl border border-slate-200 bg-white px-3 text-slate-600 hover:bg-slate-50"
-                onClick={() => { setSearchQuery(''); setSearchResults([]); void refreshList(); }}
-                hoverScale={1.04} tapScale={0.96}
-              >
-                <X className="size-4" />
-              </Button>
-            </div>
-          </Fade>
+            </CardHeader>
+            <CardContent className="grid gap-3 pb-1 sm:grid-cols-3">
+              <Card size="sm" className="border border-zinc-200/80 bg-amber-50/50 py-2">
+                <CardHeader className="gap-0 border-b border-amber-200/50">
+                  <CardDescription className="text-zinc-600">Bookmarks</CardDescription>
+                  <CardTitle className="text-lg">{summary.bookmarkCount}</CardTitle>
+                </CardHeader>
+              </Card>
+              <Card size="sm" className="border border-zinc-200/80 bg-cyan-50/50 py-2">
+                <CardHeader className="gap-0 border-b border-cyan-200/50">
+                  <CardDescription className="text-zinc-600">Folders</CardDescription>
+                  <CardTitle className="text-lg">{summary.folderCount}</CardTitle>
+                </CardHeader>
+              </Card>
+              <Card size="sm" className="border border-zinc-200/80 bg-white/80 py-2">
+                <CardHeader className="gap-0 border-b border-zinc-200/60">
+                  <CardDescription className="text-zinc-600">Current List</CardDescription>
+                  <CardTitle className="text-lg">{isSearching ? searchResults.length : shownNodes.length}</CardTitle>
+                </CardHeader>
+              </Card>
+            </CardContent>
+          </Card>
+        </motion.section>
 
-          {/* create card */}
-          <Fade delay={100} className="rounded-2xl border border-slate-200/80 bg-white/80 p-4 shadow-sm backdrop-blur">
-            <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-slate-800">
-              <Plus className="size-4 text-indigo-500" />
-              Create
-            </h2>
-            <form className="space-y-2" onSubmit={(e) => void handleCreate(e)}>
-              <div className="flex gap-2">
-                <select
-                  className="rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-sm text-slate-700 outline-none focus:border-indigo-300 transition"
-                  value={createType}
-                  onChange={(e) => setCreateType(e.target.value as 'bookmark' | 'folder')}
-                >
-                  <option value="bookmark">Bookmark</option>
-                  <option value="folder">Folder</option>
-                </select>
-                <select
-                  className="flex-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-2 text-sm text-slate-700 outline-none focus:border-indigo-300 transition"
-                  value={createParentId}
-                  onChange={(e) => setCreateParentId(e.target.value)}
-                >
-                  <option value="">Default folder</option>
-                  {folders.map((folder) => (
-                    <option key={folder.id} value={folder.id}>
-                      {folder.title || '(Untitled Folder)'}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <input
-                className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200/50 transition"
-                placeholder="Title"
-                value={createTitle}
-                onChange={(e) => setCreateTitle(e.target.value)}
-              />
-              {createType === 'bookmark' && (
-                <input
-                  className="w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200/50 transition"
-                  placeholder="https://example.com"
-                  value={createUrl}
-                  onChange={(e) => setCreateUrl(e.target.value)}
-                />
-              )}
-              <Button
-                className="w-full justify-center gap-1.5 rounded-xl bg-linear-to-r from-indigo-600 to-violet-600 py-2 text-sm font-semibold text-white shadow-sm hover:from-indigo-500 hover:to-violet-500"
-                type="submit"
-                disabled={loading}
-                hoverScale={1.02} tapScale={0.97}
-              >
-                {loading ? <Loader2 className="size-4 animate-spin" /> : (
-                  createType === 'folder' ? <FolderPlus className="size-4" /> : <Plus className="size-4" />
-                )}
-                Create {createType === 'folder' ? 'Folder' : 'Bookmark'}
-              </Button>
-            </form>
-          </Fade>
-        </div>
+        <Card className="border-zinc-200/80 bg-white/90 shadow-md">
+          <CardContent className="pt-4">
+            <Tabs defaultValue="search" className="w-full">
+              <TabsList className="mb-4 w-full justify-start" variant="line">
+                <TabsTrigger value="search" className="gap-1.5"> 
+                  <Search className="size-4" />
+                  Search
+                </TabsTrigger>
+                <TabsTrigger value="create" className="gap-1.5">
+                  <Plus className="size-4" />
+                  Create
+                </TabsTrigger>
+                <TabsTrigger value="transfer" className="gap-1.5">
+                  <FileJson className="size-4" />
+                  Transfer
+                </TabsTrigger>
+              </TabsList>
 
-        {/* ── toast notifications ── */}
+              <TabsContent value="search">
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
+                  <InputGroup className="h-10 border-zinc-300 bg-white">
+                    <InputGroupAddon side="start">
+                      <Search className="size-4 text-zinc-400" />
+                    </InputGroupAddon>
+                    <Input
+                      className="h-9 flex-1 border-0 bg-transparent shadow-none focus-visible:ring-0"
+                      placeholder="Search by title or URL"
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') {
+                          void handleSearch();
+                        }
+                      }}
+                    />
+                    {searchQuery && (
+                      <InputGroupAddon side="end">
+                        <Button
+                          variant="ghost"
+                          size="icon-xs"
+                          onClick={() => {
+                            setSearchQuery('');
+                            clearResults();
+                            void refreshList();
+                          }}
+                        >
+                          <X className="size-3" />
+                        </Button>
+                      </InputGroupAddon>
+                    )}
+                  </InputGroup>
+                  <Button className="h-10 gap-1.5 bg-zinc-900 text-white hover:bg-zinc-800" onClick={() => void handleSearch()} disabled={loading}>
+                    {loading ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                    Search
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="h-10 gap-1.5 border-zinc-300"
+                    onClick={() => {
+                      setSearchQuery('');
+                      clearResults();
+                      void refreshList();
+                    }}
+                  >
+                    <X className="size-4" />
+                    Reset
+                  </Button>
+                </div>
+
+                <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-zinc-500">
+                  <Badge variant="secondary">{isSearching ? `${searchResults.length} matches` : 'Search all bookmarks'}</Badge>
+                  {isSearching && <Badge variant="outline">Query: {searchQuery.trim()}</Badge>}
+                </div>
+              </TabsContent>
+
+              <TabsContent value="create">
+                <form className="grid gap-2" onSubmit={(event) => void handleCreate(event)}>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Select value={createType} onValueChange={(value) => setCreateType(value as 'bookmark' | 'folder')}>
+                      <SelectTrigger className="h-10 w-full border-zinc-300">
+                        <SelectValue placeholder="Item type" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="bookmark">Bookmark</SelectItem>
+                        <SelectItem value="folder">Folder</SelectItem>
+                      </SelectContent>
+                    </Select>
+
+                    <Select value={createParentId || undefined} onValueChange={(value) => setCreateParentId(value ?? '')}>
+                      <SelectTrigger className="h-10 w-full border-zinc-300">
+                        <SelectValue placeholder="Default folder" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {folders.map((folder) => (
+                          <SelectItem key={folder.id} value={folder.id}>
+                            {folder.title || '(Untitled Folder)'}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <Input
+                    className="h-10 border-zinc-300 bg-white"
+                    placeholder="Title"
+                    value={createTitle}
+                    onChange={(event) => setCreateTitle(event.target.value)}
+                  />
+
+                  {createType === 'bookmark' && (
+                    <Input
+                      className="h-10 border-zinc-300 bg-white"
+                      placeholder="https://example.com"
+                      value={createUrl}
+                      onChange={(event) => setCreateUrl(event.target.value)}
+                    />
+                  )}
+
+                  <Button
+                    type="submit"
+                    className="mt-1 h-10 gap-1.5 bg-amber-500 text-zinc-900 hover:bg-amber-400"
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <Loader2 className="size-4 animate-spin" />
+                    ) : createType === 'folder' ? (
+                      <FolderPlus className="size-4" />
+                    ) : (
+                      <Plus className="size-4" />
+                    )}
+                    Create {createType === 'folder' ? 'Folder' : 'Bookmark'}
+                  </Button>
+                </form>
+              </TabsContent>
+
+              <TabsContent value="transfer">
+                <div className="grid gap-3">
+                  <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/60 p-3">
+                    <p className="text-sm font-semibold text-zinc-800">Export Bookmarks</p>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Download current bookmark tree as JSON for backup or migration.
+                    </p>
+                    <Button
+                      className="mt-3 h-9 gap-1.5 bg-zinc-900 text-white hover:bg-zinc-800"
+                      onClick={() => void handleExportBookmarks()}
+                      disabled={pageBusy}
+                    >
+                      {transferLoading ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                      Export JSON
+                    </Button>
+                  </div>
+
+                  <div className="rounded-xl border border-zinc-200/80 bg-zinc-50/60 p-3">
+                    <p className="text-sm font-semibold text-zinc-800">Import Bookmarks</p>
+                    <p className="mt-1 text-xs text-zinc-500">
+                      Import from exported JSON. Imported data will be placed under selected folder.
+                    </p>
+
+                    <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
+                      <Select value={importParentId || undefined} onValueChange={(value) => setImportParentId(value ?? '')}>
+                        <SelectTrigger className="h-10 w-full border-zinc-300">
+                          <SelectValue placeholder="Import target folder" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {folders.map((folder) => (
+                            <SelectItem key={folder.id} value={folder.id}>
+                              {folder.title || '(Untitled Folder)'}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+
+                      <Button
+                        variant="outline"
+                        className="h-10 gap-1.5 border-zinc-300"
+                        onClick={() => importInputRef.current?.click()}
+                        disabled={pageBusy}
+                      >
+                        {transferLoading ? <Loader2 className="size-4 animate-spin" /> : <Upload className="size-4" />}
+                        Select JSON
+                      </Button>
+                    </div>
+
+                    <input
+                      ref={importInputRef}
+                      type="file"
+                      accept="application/json,.json"
+                      className="hidden"
+                      onChange={(event) => void handleImportFile(event)}
+                    />
+
+                    <p className="mt-2 text-xs text-zinc-500">
+                      {importFileName ? `Selected file: ${importFileName}` : 'No file selected'}
+                    </p>
+                  </div>
+                </div>
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
+
         <AnimatePresence>
           {error && (
-            <motion.div
-              key="err"
-              className="flex items-center gap-2 rounded-2xl border border-red-200 bg-red-50/90 px-4 py-3 text-sm text-red-700 shadow-sm backdrop-blur"
-              initial={{ opacity: 0, y: -8, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.98 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-            >
-              <BookmarkX className="size-4 shrink-0 text-red-500" />
-              <span className="flex-1">{error}</span>
-              <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600">
-                <X className="size-4" />
-              </button>
+            <motion.div key="error" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+              <Alert variant="destructive" className="border-red-300/70 bg-red-50/90">
+                <BookmarkX className="size-4" />
+                <AlertTitle>Operation failed</AlertTitle>
+                <AlertDescription>{error}</AlertDescription>
+                <AlertAction>
+                  <Button variant="ghost" size="icon-xs" onClick={() => setError(null)}>
+                    <X className="size-3" />
+                  </Button>
+                </AlertAction>
+              </Alert>
             </motion.div>
           )}
+
           {success && (
-            <motion.div
-              key="ok"
-              className="flex items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50/90 px-4 py-3 text-sm text-emerald-700 shadow-sm backdrop-blur"
-              initial={{ opacity: 0, y: -8, scale: 0.98 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: -8, scale: 0.98 }}
-              transition={{ type: 'spring', stiffness: 400, damping: 28 }}
-            >
-              <Check className="size-4 shrink-0 text-emerald-500" />
-              <span className="flex-1">{success}</span>
-              <button onClick={() => setSuccess(null)} className="text-emerald-400 hover:text-emerald-600">
-                <X className="size-4" />
-              </button>
+            <motion.div key="success" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}>
+              <Alert className="border-emerald-300/70 bg-emerald-50/90 text-emerald-800">
+                <Check className="size-4" />
+                <AlertTitle>Success</AlertTitle>
+                <AlertDescription>{success}</AlertDescription>
+                <AlertAction>
+                  <Button variant="ghost" size="icon-xs" onClick={() => setSuccess(null)}>
+                    <X className="size-3" />
+                  </Button>
+                </AlertAction>
+              </Alert>
             </motion.div>
           )}
         </AnimatePresence>
 
-        {/* ── bookmark list section ── */}
-        <Fade delay={150} className="rounded-2xl border border-slate-200/80 bg-white/80 p-5 shadow-sm backdrop-blur">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              {isSearching ? (
-                <>
-                  <Search className="size-4 text-indigo-500" />
-                  Search Results
-                </>
-              ) : (
-                <>
-                  <Bookmark className="size-4 text-indigo-500" />
-                  All Bookmarks
-                  <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-semibold text-indigo-700">
-                    <SlidingNumber number={shownNodes.length} fromNumber={0} initiallyStable className="tabular-nums" />
-                  </span>
-                </>
-              )}
-            </h2>
-            <Button
-              className="gap-1 rounded-xl border border-slate-200 bg-slate-50 px-2.5 py-1.5 text-[11px] font-medium text-slate-600 hover:bg-indigo-50 hover:border-indigo-200 hover:text-indigo-700"
-              onClick={() => void refreshList()}
-              disabled={loading}
-              hoverScale={1.04} tapScale={0.95}
-            >
-              {loading ? <Loader2 className="size-3 animate-spin" /> : <RotateCcw className="size-3" />}
-              Refresh
-            </Button>
-          </div>
-
-          {loading && shownNodes.length === 0 ? (
-            <div className="space-y-3">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <motion.div
-                  key={i}
-                  className="h-16 animate-pulse rounded-2xl bg-slate-100"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  transition={{ delay: i * 0.05 }}
-                />
-              ))}
+        <Card className="border-zinc-200/80 bg-white/90 shadow-md">
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <CardTitle className="text-base">{isSearching ? 'Search Results' : 'Bookmark Files View'}</CardTitle>
+                <Badge variant={isSearching ? 'secondary' : 'outline'}>
+                  {isSearching ? searchResults.length : shownNodes.length}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-400">右键书签可快速操作</span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5 border-zinc-300"
+                  onClick={() => void refreshList()}
+                  disabled={loading}
+                >
+                  {loading ? <Loader2 className="size-3 animate-spin" /> : <RefreshCw className="size-3" />}
+                  Refresh
+                </Button>
+              </div>
             </div>
-          ) : shownNodes.length === 0 ? (
-            <motion.div
-              className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-slate-300 bg-slate-50/60 py-12 text-center"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-            >
-              <Bookmark className="size-10 text-slate-300" />
-              <div>
-                <p className="text-sm font-medium text-slate-600">
-                  {isSearching ? 'No search results' : 'No bookmarks found'}
-                </p>
-                {!isSearching && (
-                  <p className="mt-0.5 text-xs text-slate-400">Create a bookmark to get started</p>
-                )}
-              </div>
-            </motion.div>
-          ) : (
-            <AnimatePresence>
+          </CardHeader>
+          <Separator />
+          <CardContent className="pt-4">
+            {loading && shownNodes.length === 0 ? (
               <div className="space-y-2">
-                {renderNodes(shownNodes)}
+                <Skeleton className="h-16 rounded-xl" />
+                <Skeleton className="h-16 rounded-xl" />
+                <Skeleton className="h-16 rounded-xl" />
               </div>
-            </AnimatePresence>
-          )}
-        </Fade>
-
-        {/* ── chevron breadcrumb indicate nesting ── */}
-        <Fade delay={200} className="flex items-center gap-1.5 px-1 text-[11px] text-slate-400">
-          <ChevronRight className="size-3" />
-          <span>Indented items are nested inside their parent folder.</span>
-        </Fade>
+            ) : shownNodes.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-zinc-300 bg-zinc-50/70 py-12 text-center">
+                <Bookmark className="mx-auto mb-2 size-9 text-zinc-400" />
+                <p className="text-sm font-medium text-zinc-600">
+                  {isSearching ? 'No search results found.' : 'No bookmarks available yet.'}
+                </p>
+                <p className="mt-1 text-xs text-zinc-500">
+                  {isSearching ? 'Try a broader keyword.' : 'Create a bookmark from the Create tab to start.'}
+                </p>
+              </div>
+            ) : (
+              <ScrollArea className="h-[64vh] min-h-96 pr-2">
+                <Files open={openFolders} onOpenChange={setOpenFolders} className="w-full rounded-2xl border border-zinc-200/70 bg-white/70 p-2">
+                  {renderTree(shownNodes)}
+                </Files>
+              </ScrollArea>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </main>
   );

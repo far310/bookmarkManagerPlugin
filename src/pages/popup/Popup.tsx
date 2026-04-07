@@ -1,9 +1,19 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { AnimatePresence, motion } from 'motion/react';
-import { Search, X, Settings, Bookmark, Folder, BookmarkX, Loader2 } from 'lucide-react';
-import { ApiResponse, BookmarkAction, BookmarkNode } from '@src/types/bookmark';
-import { SlidingNumber } from '@src/components/animate-ui/primitives/texts/sliding-number';
-import { Button } from '@src/components/animate-ui/components/buttons/button';
+import {
+  Search,
+  X,
+  Bookmark,
+  Folder,
+  BookmarkX,
+  History,
+} from 'lucide-react';
+import {
+  ApiResponse,
+  BookmarkAction,
+  BookmarkNode,
+  BrowserHistoryItem,
+} from '@src/types/bookmark';
+import { Button as UiButton } from '@src/components/ui/button';
 import {
   Files,
   FolderContent,
@@ -17,7 +27,12 @@ import {
   FileIcon,
   FileLabel,
 } from '@src/components/animate-ui/primitives/radix/files';
-import { Fade } from '@src/components/animate-ui/primitives/effects/fade';
+import { Input } from '@src/components/ui/input';
+import { InputGroup, InputGroupAddon } from '@src/components/ui/input-group';
+import { Card, CardContent, CardHeader } from '@src/components/ui/card';
+import { ScrollArea } from '@src/components/ui/scroll-area';
+import { Badge } from '@src/components/ui/badge';
+
 
 function sendAction<T>(action: BookmarkAction): Promise<ApiResponse<T>> {
   return new Promise((resolve, reject) => {
@@ -30,22 +45,6 @@ function sendAction<T>(action: BookmarkAction): Promise<ApiResponse<T>> {
       resolve(response);
     });
   });
-}
-
-function flattenNodes(nodes: BookmarkNode[]): BookmarkNode[] {
-  const result: BookmarkNode[] = [];
-
-  const walk = (items: BookmarkNode[]) => {
-    items.forEach((item) => {
-      result.push(item);
-      if (item.children && item.children.length > 0) {
-        walk(item.children);
-      }
-    });
-  };
-
-  walk(nodes);
-  return result;
 }
 
 function stripFirstLayer(nodes: BookmarkNode[]): BookmarkNode[] {
@@ -83,6 +82,25 @@ function getBookmarkHostname(url?: string): string {
   }
 }
 
+function highlightText(text: string, query: string): React.ReactNode {
+  if (!query.trim()) return text;
+
+  const parts = text.split(new RegExp(`(${query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, idx) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <mark key={idx} className="bg-yellow-200 font-semibold">
+            {part}
+          </mark>
+        ) : (
+          part
+        ),
+      )}
+    </>
+  );
+}
+
 function getFaviconUrl(url?: string): string {
   const hostname = getBookmarkHostname(url);
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=64`;
@@ -113,7 +131,8 @@ function BookmarkFavicon({ url }: { url?: string }) {
 export default function Popup() {
   const [tree, setTree] = useState<BookmarkNode[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState<BookmarkNode[]>([]);
+  const [bookmarkSearchResults, setBookmarkSearchResults] = useState<BookmarkNode[]>([]);
+  const [historySearchResults, setHistorySearchResults] = useState<BrowserHistoryItem[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [initialLoaded, setInitialLoaded] = useState(false);
@@ -121,19 +140,7 @@ export default function Popup() {
 
   const isSearching = searchQuery.trim().length > 0;
   const visibleTree = useMemo(() => stripFirstLayer(tree), [tree]);
-  const list = isSearching ? searchResults : visibleTree;
-
-  const treeBookmarksCount = useMemo(() => {
-    return flattenNodes(tree).filter((item) => !!item.url).length;
-  }, [tree]);
-
-  const visibleFoldersCount = useMemo(() => {
-    return flattenNodes(visibleTree).filter((item) => !item.url).length;
-  }, [visibleTree]);
-
-  const visibleBookmarkCount = useMemo(() => {
-    return flattenNodes(visibleTree).filter((item) => !!item.url).length;
-  }, [visibleTree]);
+  const totalSearchResults = bookmarkSearchResults.length + historySearchResults.length;
 
   useEffect(() => {
     void loadTree();
@@ -143,7 +150,8 @@ export default function Popup() {
     const query = searchQuery.trim();
     const timerId = window.setTimeout(() => {
       if (!query) {
-        setSearchResults([]);
+        setBookmarkSearchResults([]);
+        setHistorySearchResults([]);
         return;
       }
       void handleSearch(query);
@@ -175,22 +183,36 @@ export default function Popup() {
   async function handleSearch(rawQuery?: string) {
     const query = (rawQuery ?? searchQuery).trim();
     if (!query) {
-      setSearchResults([]);
+      setBookmarkSearchResults([]);
+      setHistorySearchResults([]);
       return;
     }
 
     setLoading(true);
     setError(null);
     try {
-      const response = await sendAction<BookmarkNode[]>({
-        type: 'SEARCH_BOOKMARKS',
-        payload: { query },
-      });
-      if (!response.ok) {
-        setError(response.error);
+      const [bookmarkResponse, historyResponse] = await Promise.all([
+        sendAction<BookmarkNode[]>({
+          type: 'SEARCH_BOOKMARKS',
+          payload: { query },
+        }),
+        sendAction<BrowserHistoryItem[]>({
+          type: 'SEARCH_BROWSER_HISTORY',
+          payload: { query, maxResults: 30 },
+        }),
+      ]);
+
+      if (!bookmarkResponse.ok) {
+        setError(bookmarkResponse.error);
         return;
       }
-      setSearchResults(response.data);
+      if (!historyResponse.ok) {
+        setError(historyResponse.error);
+        return;
+      }
+
+      setBookmarkSearchResults(bookmarkResponse.data);
+      setHistorySearchResults(historyResponse.data);
     } catch (caughtError) {
       const message = caughtError instanceof Error ? caughtError.message : 'Search failed';
       setError(message);
@@ -204,11 +226,6 @@ export default function Popup() {
       return;
     }
     chrome.tabs.create({ url });
-  }
-
-  function openOptions() {
-    const optionsUrl = chrome.runtime.getURL('src/pages/options/index.html#general');
-    chrome.tabs.create({ url: optionsUrl });
   }
 
   function renderBookmarkTree(nodes: BookmarkNode[]): React.ReactNode {
@@ -275,25 +292,20 @@ export default function Popup() {
     });
   }
 
-  function renderSearchResults(nodes: BookmarkNode[]): React.ReactNode {
-    return nodes.map((node, idx) => {
+  function renderBookmarkSearchResults(nodes: BookmarkNode[]): React.ReactNode {
+    return nodes.map((node) => {
       const isFolder = !node.url;
       const folderSummary = isFolder
         ? `${countBookmarksInNode(node)} bookmarks${countFoldersInNode(node) > 0 ? ` · ${countFoldersInNode(node)} folders` : ''}`
         : getBookmarkHostname(node.url);
 
       return (
-        <motion.div
-          key={node.id}
-          className="space-y-0.5"
-          initial={{ opacity: 0, x: -8 }}
-          animate={{ opacity: 1, x: 0 }}
-          transition={{ duration: 0.2, delay: Math.min(idx * 0.03, 0.18) }}
-        >
-          <Button
+        <div key={node.id} className="">
+          <UiButton
+            variant="outline"
             className={[
-              'group w-full justify-start gap-2 rounded-xl border border-transparent px-2.5 py-2 text-left text-xs font-medium',
-              'hover:border-indigo-200/60 hover:bg-indigo-50/80 hover:shadow-sm',
+              'group my-0.5 h-auto w-full justify-start gap-2 rounded-lg border-slate-200 px-2.5 py-2 text-left text-xs font-medium',
+              'hover:border-indigo-200/60 hover:bg-indigo-50/80',
               isFolder
                 ? 'cursor-default text-slate-600 hover:text-slate-700'
                 : 'cursor-pointer text-slate-800 hover:text-indigo-900',
@@ -301,8 +313,6 @@ export default function Popup() {
             onClick={() => openBookmark(node.url)}
             disabled={isFolder}
             title={node.url || node.title}
-            hoverScale={isFolder ? 1 : 1.015}
-            tapScale={isFolder ? 1 : 0.97}
           >
             <span className="shrink-0 transition-transform group-hover:scale-110">
               {isFolder ? (
@@ -314,183 +324,155 @@ export default function Popup() {
               )}
             </span>
             <span className="min-w-0 flex-1">
-              <span className="block truncate leading-snug">{node.title || '(Untitled)'}</span>
+              <span className="block truncate leading-snug">{highlightText(node.title || '(Untitled)', searchQuery)}</span>
               <span className="block truncate text-[10px] font-medium text-slate-400">
-                {folderSummary}
+                {highlightText(folderSummary, searchQuery)}
               </span>
             </span>
-          </Button>
-        </motion.div>
+          </UiButton>
+        </div>
       );
     });
   }
 
+  function renderHistoryResults(nodes: BrowserHistoryItem[]): React.ReactNode {
+    return nodes.map((item) => (
+      <div key={item.id}>
+        <UiButton
+          variant="outline"
+          className="group my-0.5 h-auto w-full justify-start gap-2 rounded-lg border-slate-200 px-2.5 py-2 text-left text-xs font-medium text-slate-800 hover:border-indigo-200/60 hover:bg-indigo-50/80 hover:text-indigo-900"
+          onClick={() => openBookmark(item.url)}
+          title={item.url}
+        >
+          <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500">
+            <History className="size-3.5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block truncate leading-snug">{highlightText(item.title || '(Untitled)', searchQuery)}</span>
+            <span className="block truncate text-[10px] font-medium text-slate-400">
+              {highlightText(item.url, searchQuery)}
+            </span>
+          </span>
+        </UiButton>
+      </div>
+    ));
+  }
+
   return (
-    <main className="relative flex h-full flex-col overflow-hidden bg-[radial-gradient(ellipse_at_top,#eef2ff_0%,#f8fafc_55%,#e2e8f0_100%)] text-slate-900">
-      {/* ambient blobs */}
-      <div className="pointer-events-none absolute -top-16 -right-16 h-40 w-40 rounded-full bg-indigo-300/25 blur-3xl" />
-      <div className="pointer-events-none absolute bottom-8 -left-12 h-32 w-32 rounded-full bg-sky-300/20 blur-3xl" />
-
-      {/* ── header ── */}
-      <header className="relative border-b border-slate-200/70 bg-white/70 px-3 pt-3 pb-2.5 backdrop-blur-md">
-        <Fade delay={0} className="mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-1.5">
-            <div className="flex h-5 w-5 items-center justify-center rounded-md bg-indigo-600 shadow-sm shadow-indigo-400/40">
-              <Bookmark className="size-3 text-white" />
-            </div>
-            <h1 className="text-sm font-semibold tracking-tight text-slate-800">Bookmark Pulse</h1>
-          </div>
-          <motion.div
-            className="flex items-center gap-1 rounded-full bg-indigo-600 px-2.5 py-0.5 text-xs font-semibold text-white shadow-sm shadow-indigo-400/30"
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            transition={{ delay: 0.15, type: 'spring', stiffness: 360, damping: 22 }}
-          >
-            <SlidingNumber number={treeBookmarksCount} fromNumber={0} initiallyStable className="tabular-nums" />
-            <span className="text-[10px] tracking-wide text-indigo-200">items</span>
-          </motion.div>
-        </Fade>
-
-        {/* search bar */}
-        <Fade delay={0.05} className="flex gap-1.5">
-          <div className="relative flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3 -translate-y-1/2 text-slate-400" />
-            <input
-              className="w-full rounded-xl border border-slate-200 bg-white/90 py-1.5 pl-7 pr-2.5 text-[11px] text-slate-900 shadow-sm outline-none placeholder:text-slate-400 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200/50 transition"
+    <main className="h-full text-slate-900">
+      <Card className="h-full bg-white/85 rounded-none border-none! outline-0 gap-1.5!">
+        <CardHeader className="flex-row flex items-center gap-2">
+          <InputGroup className="h-10 flex-1 rounded-xl border-slate-200 bg-white/90 shadow-sm">
+            <InputGroupAddon side="start">
+              <Search className="size-3.5" />
+            </InputGroupAddon>
+            <Input
+              className="h-9 flex-1 border-0 bg-transparent px-2 text-[11px] shadow-none focus-visible:ring-0"
               value={searchQuery}
               onChange={(event) => setSearchQuery(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === 'Enter') {
                   void handleSearch(searchQuery);
                 }
+                if (event.key === 'Escape') {
+                  setSearchQuery('');
+                  setBookmarkSearchResults([]);
+                  setHistorySearchResults([]);
+                }
               }}
-              placeholder="Search title or URL…"
+              placeholder="搜索书签和浏览历史..."
             />
-          </div>
-          <Button
-            onClick={() => void handleSearch(searchQuery)}
-            hoverScale={1.04}
-            tapScale={0.94}
-          >
-            {loading ? <Loader2 className="size-3 animate-spin" /> : <Search className="size-3" />}
-          </Button>
-          <Button
-            onClick={() => {
-              setSearchQuery('');
-              setSearchResults([]);
-            }}
-            hoverScale={1.03}
-            tapScale={0.96}
-          >
-            <X className="size-3" />
-          </Button>
-        </Fade>
+            {searchQuery.trim().length > 0 && (
+              <InputGroupAddon side="end">
+                <UiButton
+                  variant="ghost"
+                  size="icon-xs"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setBookmarkSearchResults([]);
+                    setHistorySearchResults([]);
+                  }}
+                  title="Clear search"
+                >
+                  <X className="size-3" />
+                </UiButton>
+              </InputGroupAddon>
+            )}
+          </InputGroup>
+        </CardHeader>
 
-        <Fade delay={0.08} className="mt-2 flex flex-wrap gap-1.5">
-          <div className="inline-flex items-center gap-1 rounded-full border border-indigo-200/80 bg-indigo-50 px-2.5 py-1 text-[10px] font-semibold text-indigo-700 shadow-sm">
-            <Bookmark className="size-3" />
-            <span>{visibleBookmarkCount} visible bookmarks</span>
-          </div>
-          <div className="inline-flex items-center gap-1 rounded-full border border-amber-200/80 bg-amber-50 px-2.5 py-1 text-[10px] font-semibold text-amber-700 shadow-sm">
-            <Folder className="size-3" />
-            <span>{visibleFoldersCount} folders</span>
-          </div>
-          {isSearching && (
-            <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white/80 px-2.5 py-1 text-[10px] font-semibold text-slate-600 shadow-sm">
-              <Search className="size-3" />
-              <span>{searchResults.length} matches</span>
+        <CardContent className="flex min-h-0 flex-1 flex-col gap-2">
+          {error && (
+            <div className="flex items-start gap-2 rounded-lg border border-red-200 bg-red-50 px-2.5 py-2 text-[11px] text-red-700 shadow-sm">
+              <BookmarkX className="mt-0.5 size-3.5 shrink-0" />
+              <span>{error}</span>
             </div>
           )}
-        </Fade>
-      </header>
 
-      {/* ── bookmark list ── */}
-      <section className="relative flex-1 overflow-y-auto p-2 pb-20">
-        <AnimatePresence mode="wait">
-          {loading && (
-            <motion.div
-              key="loading"
-              className="flex flex-col gap-2 pt-1"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              {Array.from({ length: 5 }).map((_, i) => (
-                <motion.div
-                  key={i}
-                  className="h-8 animate-pulse rounded-xl bg-slate-200/80"
-                  initial={{ opacity: 0, scaleX: 0.92 }}
-                  animate={{ opacity: 1, scaleX: 1 }}
-                  transition={{ delay: i * 0.04 }}
-                />
-              ))}
-            </motion.div>
-          )}
-
-          {!loading && error && (
-            <motion.div
-              key="error"
-              className="mx-1 mt-1 flex items-start gap-2 rounded-xl border border-red-200 bg-red-50/80 px-3 py-2.5 text-xs text-red-700 backdrop-blur"
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-            >
-              <BookmarkX className="mt-0.5 size-3.5 shrink-0 text-red-500" />
-              <span>{error}</span>
-            </motion.div>
-          )}
-
-          {!loading && !error && list.length === 0 && (
-            <motion.div
-              key="empty"
-              className="mx-1 mt-3 flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white/60 py-8 text-center backdrop-blur"
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -8 }}
-            >
-              <Bookmark className="size-7 text-slate-300" />
-              <span className="text-xs text-slate-500">
-                {isSearching ? 'No results found' : initialLoaded ? 'No bookmarks yet' : 'Preparing view…'}
-              </span>
-            </motion.div>
-          )}
-
-          {!loading && !error && list.length > 0 && (
-            <motion.div
-              key="list"
-              className="space-y-0.5 pt-0.5"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-            >
-              {isSearching ? (
-                renderSearchResults(list)
-              ) : (
-                <Files
-                  open={openFolders}
-                  onOpenChange={setOpenFolders}
-                  className="rounded-2xl border border-slate-200/70 bg-white/75 shadow-[0_10px_30px_rgba(15,23,42,0.08)] backdrop-blur-sm"
-                >
-                  {renderBookmarkTree(list)}
-                </Files>
+          <ScrollArea className="min-h-0 flex-1">
+              {loading && (
+                <div className="flex flex-col gap-2 pt-1">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <div key={i} className="h-8 animate-pulse rounded-xl bg-slate-200/80" />
+                  ))}
+                </div>
               )}
-            </motion.div>
-          )}
-        </AnimatePresence>
-      </section>
 
-      {/* ── footer ── */}
-      <footer className="fixed bottom-0 inset-x-0 w-full border-t border-slate-200/70 bg-white/70 p-2.5 backdrop-blur-md">
-        <Button
-          className='w-full'
-          onClick={openOptions}
-          hoverScale={1.02}
-          tapScale={0.97}
-        >
-          <Settings className="size-3.5" />
-          Open Settings
-        </Button>
-      </footer>
+              {!loading && !error && isSearching && totalSearchResults === 0 && (
+                <div className="mx-1 mt-3 flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white/60 py-8 text-center backdrop-blur">
+                  <History className="size-7 text-slate-300" />
+                  <span className="text-xs text-slate-500">未找到浏览历史或书签结果</span>
+                </div>
+              )}
+
+              {!loading && !error && !isSearching && visibleTree.length === 0 && (
+                <div className="mx-1 mt-3 flex flex-col items-center gap-2 rounded-2xl border border-dashed border-slate-300 bg-white/60 py-8 text-center backdrop-blur">
+                  <Bookmark className="size-7 text-slate-300" />
+                  <span className="text-xs text-slate-500">
+                    {initialLoaded ? 'No bookmarks yet' : 'Preparing view...'}
+                  </span>
+                </div>
+              )}
+
+              {!loading && !error && isSearching && totalSearchResults > 0 && (
+                <>
+                  <div className="flex items-center gap-2 py-1">
+                    <Badge variant="outline">共 {totalSearchResults} 条结果</Badge>
+                    <Badge variant="outline">书签 {bookmarkSearchResults.length}</Badge>
+                    <Badge variant="outline">历史 {historySearchResults.length}</Badge>
+                  </div>
+
+                  {bookmarkSearchResults.length > 0 && (
+                    <div className="mt-1">
+                      <div className="px-1 pb-1 text-[10px] font-semibold tracking-wide text-slate-400">书签</div>
+                      {renderBookmarkSearchResults(bookmarkSearchResults)}
+                    </div>
+                  )}
+
+                  {historySearchResults.length > 0 && (
+                    <div className="mt-2">
+                      <div className="px-1 pb-1 text-[10px] font-semibold tracking-wide text-slate-400">历史访问</div>
+                      {renderHistoryResults(historySearchResults)}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {!loading && !error && !isSearching && visibleTree.length > 0 && (
+                <>
+                  <Files
+                    open={openFolders}
+                    onOpenChange={setOpenFolders}
+                    className="rounded-2xl border border-slate-200/70 shadow-none"
+                  >
+                    {renderBookmarkTree(visibleTree)}
+                  </Files>
+                </>
+              )}
+          </ScrollArea>
+        </CardContent>
+      </Card>
+
     </main>
   );
 }
