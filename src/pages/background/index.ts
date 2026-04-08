@@ -48,6 +48,58 @@ function toHistoryItem(item: chrome.history.HistoryItem): BrowserHistoryItem | n
 	};
 }
 
+function formatTimeForSearch(timestamp?: number): string {
+	if (!timestamp) {
+		return '';
+	}
+
+	const date = new Date(timestamp);
+	const yyyy = date.getFullYear();
+	const mm = String(date.getMonth() + 1).padStart(2, '0');
+	const dd = String(date.getDate()).padStart(2, '0');
+	const hh = String(date.getHours()).padStart(2, '0');
+	const mi = String(date.getMinutes()).padStart(2, '0');
+
+	return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
+function flattenBookmarkNodes(nodes: chrome.bookmarks.BookmarkTreeNode[]): chrome.bookmarks.BookmarkTreeNode[] {
+	const all: chrome.bookmarks.BookmarkTreeNode[] = [];
+
+	const walk = (list: chrome.bookmarks.BookmarkTreeNode[]) => {
+		for (const node of list) {
+			all.push(node);
+			if (node.children?.length) {
+				walk(node.children);
+			}
+		}
+	};
+
+	walk(nodes);
+	return all;
+}
+
+function matchesBookmarkQuery(node: chrome.bookmarks.BookmarkTreeNode, query: string): boolean {
+	const normalized = query.toLowerCase();
+	const title = (node.title || '').toLowerCase();
+	const url = (node.url || '').toLowerCase();
+	const addedAt = formatTimeForSearch(node.dateAdded).toLowerCase();
+	const timestamp = node.dateAdded ? String(node.dateAdded) : '';
+
+	return [title, url, addedAt, timestamp].some((part) => part.includes(normalized));
+}
+
+function matchesHistoryQuery(item: chrome.history.HistoryItem, query: string): boolean {
+	const normalized = query.toLowerCase();
+	const title = (item.title || '').toLowerCase();
+	const url = (item.url || '').toLowerCase();
+	const visitedAt = formatTimeForSearch(item.lastVisitTime).toLowerCase();
+	const visitCount = item.visitCount ? String(item.visitCount) : '';
+	const typedCount = item.typedCount ? String(item.typedCount) : '';
+
+	return [title, url, visitedAt, visitCount, typedCount].some((part) => part.includes(normalized));
+}
+
 function isValidUrl(url: string): boolean {
 	return /^https?:\/\//.test(url);
 }
@@ -211,7 +263,11 @@ async function handleAction(action: BookmarkAction): Promise<ApiResponse<unknown
 			if (!query) {
 				return fail('Search query is required');
 			}
-			const matches = await searchBookmarks(query);
+
+			const tree = await getTree();
+			const roots = tree.flatMap((item) => item.children ?? []);
+			const allNodes = flattenBookmarkNodes(roots);
+			const matches = allNodes.filter((node) => matchesBookmarkQuery(node, query)).slice(0, 100);
 			return ok(matches.map(toBookmarkNode));
 		}
 
@@ -222,7 +278,9 @@ async function handleAction(action: BookmarkAction): Promise<ApiResponse<unknown
 			}
 
 			const maxResults = Math.min(Math.max(action.payload.maxResults ?? 30, 1), 100);
-			const matches = await searchBrowserHistory(query, maxResults);
+			const historyPoolSize = Math.max(maxResults * 5, 100);
+			const candidates = await searchBrowserHistory('', historyPoolSize);
+			const matches = candidates.filter((item) => matchesHistoryQuery(item, query)).slice(0, maxResults);
 			return ok(matches.map(toHistoryItem).filter((item): item is BrowserHistoryItem => item !== null));
 		}
 
