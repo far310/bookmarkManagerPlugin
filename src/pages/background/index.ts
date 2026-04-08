@@ -14,15 +14,19 @@ function fail(message: string): ApiResponse<never> {
 	return { ok: false, error: message };
 }
 
-function toBookmarkNode(node: chrome.bookmarks.BookmarkTreeNode): BookmarkNode {
+function toBookmarkNode(
+	node: chrome.bookmarks.BookmarkTreeNode,
+	folderPath?: string,
+): BookmarkNode {
 	return {
 		id: node.id,
 		parentId: node.parentId,
 		title: node.title,
 		url: node.url,
+		folderPath,
 		index: node.index,
 		dateAdded: node.dateAdded,
-		children: node.children?.map(toBookmarkNode),
+		children: node.children?.map((child) => toBookmarkNode(child)),
 	};
 }
 
@@ -77,6 +81,37 @@ function flattenBookmarkNodes(nodes: chrome.bookmarks.BookmarkTreeNode[]): chrom
 
 	walk(nodes);
 	return all;
+}
+
+function normalizeFolderTitle(node: chrome.bookmarks.BookmarkTreeNode): string {
+	const title = node.title.trim();
+	return title || '(Untitled Folder)';
+}
+
+function createBookmarkContainerPathMap(
+	nodes: chrome.bookmarks.BookmarkTreeNode[],
+): Map<string, string> {
+	const pathMap = new Map<string, string>();
+
+	const walk = (
+		list: chrome.bookmarks.BookmarkTreeNode[],
+		parentFolders: string[],
+	) => {
+		for (const node of list) {
+			pathMap.set(node.id, parentFolders.join(' / '));
+
+			const nextParentFolders = node.url
+				? parentFolders
+				: [...parentFolders, normalizeFolderTitle(node)];
+
+			if (node.children?.length) {
+				walk(node.children, nextParentFolders);
+			}
+		}
+	};
+
+	walk(nodes, []);
+	return pathMap;
 }
 
 function matchesBookmarkQuery(node: chrome.bookmarks.BookmarkTreeNode, query: string): boolean {
@@ -246,7 +281,7 @@ async function handleAction(action: BookmarkAction): Promise<ApiResponse<unknown
 	switch (action.type) {
 		case 'LIST_BOOKMARKS': {
 			const tree = await getTree();
-			return ok(tree.map(toBookmarkNode));
+			return ok(tree.map((node) => toBookmarkNode(node)));
 		}
 
 		case 'EXPORT_BOOKMARKS': {
@@ -266,9 +301,10 @@ async function handleAction(action: BookmarkAction): Promise<ApiResponse<unknown
 
 			const tree = await getTree();
 			const roots = tree.flatMap((item) => item.children ?? []);
+			const containerPathMap = createBookmarkContainerPathMap(roots);
 			const allNodes = flattenBookmarkNodes(roots);
 			const matches = allNodes.filter((node) => matchesBookmarkQuery(node, query)).slice(0, 100);
-			return ok(matches.map(toBookmarkNode));
+			return ok(matches.map((node) => toBookmarkNode(node, containerPathMap.get(node.id))));
 		}
 
 		case 'SEARCH_BROWSER_HISTORY': {

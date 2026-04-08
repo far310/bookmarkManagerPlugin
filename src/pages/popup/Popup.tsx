@@ -313,6 +313,7 @@ export default function Popup() {
       const folderSummary = isFolder
         ? `${countBookmarksInNode(node)} bookmarks${countFoldersInNode(node) > 0 ? ` · ${countFoldersInNode(node)} folders` : ''}`
         : getBookmarkHostname(node.url);
+      const folderPathText = `所在目录: ${node.folderPath || '根目录'}`;
       const createdAt = `创建: ${formatDisplayTime(node.dateAdded)}`;
 
       return (
@@ -343,6 +344,9 @@ export default function Popup() {
               <span className="block truncate leading-snug">{highlightText(node.title || '(Untitled)', searchQuery)}</span>
               <span className="block truncate text-[10px] font-medium text-slate-400">
                 {highlightText(folderSummary, searchQuery)}
+              </span>
+              <span className="block truncate text-[10px] font-medium text-slate-400">
+                {highlightText(folderPathText, searchQuery)}
               </span>
               <span className="block truncate text-[10px] font-medium text-slate-400">
                 {highlightText(createdAt, searchQuery)}

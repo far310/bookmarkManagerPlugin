@@ -15,6 +15,7 @@ export type BookmarkNode = {
   parentId?: string;
   title: string;
   url?: string;
+  folderPath?: string;
   index?: number;
   dateAdded?: number;
   children?: BookmarkNode[];
