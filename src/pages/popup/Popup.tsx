@@ -106,6 +106,21 @@ function getFaviconUrl(url?: string): string {
   return `https://www.google.com/s2/favicons?domain=${encodeURIComponent(hostname)}&sz=64`;
 }
 
+function formatDisplayTime(timestamp?: number): string {
+  if (!timestamp) {
+    return '未知时间';
+  }
+
+  const date = new Date(timestamp);
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const mi = String(date.getMinutes()).padStart(2, '0');
+
+  return `${yyyy}-${mm}-${dd} ${hh}:${mi}`;
+}
+
 function BookmarkFavicon({ url }: { url?: string }) {
   const [failed, setFailed] = useState(false);
 
@@ -298,6 +313,7 @@ export default function Popup() {
       const folderSummary = isFolder
         ? `${countBookmarksInNode(node)} bookmarks${countFoldersInNode(node) > 0 ? ` · ${countFoldersInNode(node)} folders` : ''}`
         : getBookmarkHostname(node.url);
+      const createdAt = `创建: ${formatDisplayTime(node.dateAdded)}`;
 
       return (
         <div key={node.id} className="">
@@ -328,6 +344,9 @@ export default function Popup() {
               <span className="block truncate text-[10px] font-medium text-slate-400">
                 {highlightText(folderSummary, searchQuery)}
               </span>
+              <span className="block truncate text-[10px] font-medium text-slate-400">
+                {highlightText(createdAt, searchQuery)}
+              </span>
             </span>
           </UiButton>
         </div>
@@ -336,26 +355,34 @@ export default function Popup() {
   }
 
   function renderHistoryResults(nodes: BrowserHistoryItem[]): React.ReactNode {
-    return nodes.map((item) => (
-      <div key={item.id}>
-        <UiButton
-          variant="outline"
-          className="group my-0.5 h-auto w-full justify-start gap-2 rounded-lg border-slate-200 px-2.5 py-2 text-left text-xs font-medium text-slate-800 hover:border-indigo-200/60 hover:bg-indigo-50/80 hover:text-indigo-900"
-          onClick={() => openBookmark(item.url)}
-          title={item.url}
-        >
-          <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500">
-            <History className="size-3.5" />
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate leading-snug">{highlightText(item.title || '(Untitled)', searchQuery)}</span>
-            <span className="block truncate text-[10px] font-medium text-slate-400">
-              {highlightText(item.url, searchQuery)}
+    return nodes.map((item) => {
+      const visitedAt = `最近访问: ${formatDisplayTime(item.lastVisitTime)}`;
+      const visits = `访问次数: ${item.visitCount ?? 0}`;
+
+      return (
+        <div key={item.id}>
+          <UiButton
+            variant="outline"
+            className="group my-0.5 h-auto w-full justify-start gap-2 rounded-lg border-slate-200 px-2.5 py-2 text-left text-xs font-medium text-slate-800 hover:border-indigo-200/60 hover:bg-indigo-50/80 hover:text-indigo-900"
+            onClick={() => openBookmark(item.url)}
+            title={item.url}
+          >
+            <span className="flex size-5 shrink-0 items-center justify-center rounded-md bg-slate-100 text-slate-500">
+              <History className="size-3.5" />
             </span>
-          </span>
-        </UiButton>
-      </div>
-    ));
+            <span className="min-w-0 flex-1">
+              <span className="block truncate leading-snug">{highlightText(item.title || '(Untitled)', searchQuery)}</span>
+              <span className="block truncate text-[10px] font-medium text-slate-400">
+                {highlightText(item.url, searchQuery)}
+              </span>
+              <span className="block truncate text-[10px] font-medium text-slate-400">
+                {highlightText(`${visitedAt} · ${visits}`, searchQuery)}
+              </span>
+            </span>
+          </UiButton>
+        </div>
+      );
+    });
   }
 
   return (
