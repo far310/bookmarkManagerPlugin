@@ -540,6 +540,11 @@ export default function Options() {
                 {highlightText(node.url, searchQuery)}
               </a>
             )}
+            {isSearching && (
+              <span className="mt-0.5 block truncate text-[11px] text-zinc-500">
+                目录: {highlightText(node.folderPath || '根目录', searchQuery)}
+              </span>
+            )}
           </span>
           {!isRoot && !isEditing && (
             <span className="invisible flex shrink-0 items-center gap-0.5 group-hover:visible">

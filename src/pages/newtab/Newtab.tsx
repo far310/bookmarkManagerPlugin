@@ -257,6 +257,11 @@ export default function Newtab() {
                       <div className="truncate text-[11px] text-white/30 group-hover:text-white/50">
                         {new URL(node.url!).hostname}
                       </div>
+                      {isSearching && (
+                        <div className="truncate text-[11px] text-white/35 group-hover:text-white/55">
+                          In {node.folderPath || 'Root'}
+                        </div>
+                      )}
                     </div>
                     <ExternalLink className="absolute top-3 right-3 size-3 text-white/0 group-hover:text-white/40 transition" />
                   </motion.button>
